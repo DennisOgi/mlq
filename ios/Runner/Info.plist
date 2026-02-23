@@ -61,6 +61,6 @@
 	<string>My Leadership Quest needs microphone access for video recording</string>
 	<!-- Minimum iOS version -->
 	<key>MinimumOSVersion</key>
-	<string>12.0</string>
+	<string>15.0</string>
 </dict>
 </plist>
