@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Theme for Android 15+ (SDK 35) with edge-to-edge support -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:windowBackground">@drawable/launch_background</item>
+        <!-- Android 15 edge-to-edge: system bars are transparent by default -->
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">false</item>
+    </style>
+    
+    <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:windowBackground">?android:colorBackground</item>
+        <!-- Android 15 edge-to-edge configuration -->
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>
