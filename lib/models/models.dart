@@ -11,5 +11,9 @@ export 'gratitude_model.dart';
 export 'ai_coach_conversation_model.dart';
 export 'ai_coach_message_model.dart';
 export 'user_challenge_model.dart';
-
 export 'community_model.dart';
+export 'mood_entry_model.dart';
+export 'skill_tree_model.dart';
+export 'avatar_item_model.dart';
+export 'wallet_transaction_model.dart';
+export 'savings_goal_model.dart';

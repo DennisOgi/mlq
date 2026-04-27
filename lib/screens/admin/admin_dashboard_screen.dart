@@ -11,6 +11,8 @@ import 'analytics_dashboard_screen.dart';
 import 'community_management_screen.dart';
 import 'maintenance_notice_screen.dart';
 import 'school_courses_admin_screen.dart';
+import 'school_leaderboards_screen.dart';
+import 'reward_disbursement_screen.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   static const routeName = '/admin-dashboard';
@@ -237,6 +239,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 children: [
                   _buildMonthlyTopUsersCard(),
                   const SizedBox(height: 16),
+                  _buildSchoolLeaderboardsCard(),
+                  const SizedBox(height: 16),
+                  _buildRewardDisbursementCard(),
+                  const SizedBox(height: 16),
                   if (_challenges.isEmpty)
                     Center(
                       child: Column(
@@ -439,6 +445,132 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         backgroundColor: AppColors.secondary,
         heroTag: 'admin_add_challenge_fab',
         child: const Icon(Icons.add),
+      ),
+    );
+  }
+
+  Widget _buildSchoolLeaderboardsCard() {
+    return InkWell(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => const SchoolLeaderboardsScreen(),
+          ),
+        );
+      },
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          color: Colors.white,
+          border: Border.all(color: AppColors.primary.withOpacity(0.1)),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.primary.withOpacity(0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.school, color: AppColors.primary, size: 28),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'School Leaderboards',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'View top 3 students for every registered school',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: Colors.grey),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRewardDisbursementCard() {
+    return InkWell(
+      onTap: () {
+        Navigator.of(context).pushNamed('/admin-reward-disbursements');
+      },
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          color: Colors.white,
+          border: Border.all(color: Colors.orange.withOpacity(0.3)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.orange.withOpacity(0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.account_balance_wallet, color: Colors.orange, size: 28),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Reward Disbursements',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.orange,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Manage LeadWallet rewards and payouts',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: Colors.grey),
+          ],
+        ),
       ),
     );
   }

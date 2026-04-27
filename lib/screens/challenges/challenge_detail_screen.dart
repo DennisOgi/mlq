@@ -127,7 +127,7 @@ class _RulesProgress extends StatelessWidget {
           // For single-rule challenges, prefer server progress for consistency
           int current;
           if (useSingleRuleServerProgress) {
-            current = serverProgress!;
+            current = serverProgress;
           } else if (ruleType == 'gratitude_count_in_window') {
             // For gratitude count, fetch from server (handled via nested FutureBuilder)
             rows.add(FutureBuilder<int>(

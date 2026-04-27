@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:intl/intl.dart';
 import 'package:my_leadership_quest/constants/app_constants.dart' hide AppColors;
 import '../../models/challenge_model.dart';
 import '../../services/admin_service.dart';
 import '../../theme/app_colors.dart';
 import 'package:image_picker/image_picker.dart';
+import 'dart:io';
 import '../../services/organization_settings_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';

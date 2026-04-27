@@ -130,12 +130,12 @@ class AdvancedAutonomousCoach {
       final conversationId = 'predictive_${DateTime.now().millisecondsSinceEpoch}';
       final aiResponse = await _aiCoachService.sendMessage(conversationId, prompt);
 
-      if (aiResponse?.content != null) {
+      if (aiResponse.content != null) {
         await _adaptPersonalityForInsight(insight);
 
         return AdvancedAutonomousMessage(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
-          content: aiResponse!.content,
+          content: aiResponse.content,
           timestamp: DateTime.now(),
           type: _mapInsightToMessageType(insight.type),
           questorImage: _selectQuestorImageForInsight(insight),
@@ -242,12 +242,12 @@ Generate ONE brief coaching message (max 50 words) that addresses the predicted 
       final prompt = _buildAdvancedCoachingPrompt(userSnapshot, emotionalState);
       final aiResponse = await _aiCoachService.sendMessage(conversationId, prompt);
 
-      if (aiResponse?.content != null) {
+      if (aiResponse.content != null) {
         await _evolvePersonality(emotionalState, userSnapshot);
 
         return AdvancedAutonomousMessage(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
-          content: aiResponse!.content,
+          content: aiResponse.content,
           timestamp: DateTime.now(),
           type: _determineAdvancedMessageType(userSnapshot, emotionalState),
           questorImage: _selectAdvancedQuestorImage(emotionalState, userSnapshot),

@@ -1,0 +1,60 @@
+# Flutter build artifacts
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local files
+*.log
+*.lock
+
+# Test files
+test/
+integration_test/
+
+# Android/iOS specific
+android/
+ios/
+macos/
+linux/
+windows/
+
+# Documentation (keep only essential)
+*.md
+!README.md
+
+# Scripts
+*.sh
+*.ps1
+*.bat
+
+# Installer files
+*.iss
+*.exe
+*.msi
+*.dmg
+*.deb
+*.rpm
+
+# SQL files
+*.sql
+
+# CSV files
+*.csv
+*.txt
+*.json
+!vercel.json
+!pubspec.json
+!analysis_options.json

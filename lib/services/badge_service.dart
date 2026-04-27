@@ -169,11 +169,8 @@ class BadgeService {
 
       debugPrint('✅ Badge inserted successfully!');
 
-      // Award XP for earning the badge (keep existing behavior)
-      final xpReward = badgeDef['xp_reward'] as int? ?? 0;
-      if (xpReward > 0) {
-        await SupabaseService().addXp(xpReward);
-      }
+      // Badge XP disabled as requested.
+
 
       // Award coins for earning the badge (new behavior)
       final coinReward = (badgeDef['coin_reward'] as num?)?.toDouble() ?? 0.0;
@@ -193,7 +190,7 @@ class BadgeService {
       }
 
       debugPrint(
-          '🎉 BadgeService: Successfully awarded badge ${badge.name} with ${xpReward} XP and ${coinReward.toStringAsFixed(1)} coins');
+          '🎉 BadgeService: Successfully awarded badge ${badge.name} with ${coinReward.toStringAsFixed(1)} coins');
       return true;
     } catch (e) {
       debugPrint('❌ Error saving badge to database: $e');
@@ -298,15 +295,36 @@ class BadgeService {
   }
 
   Future<List<BadgeModel>> _checkGoalsCompletedMilestones() async {
-    if (goalProvider == null) return [];
     final List<BadgeModel> earned = [];
     int completed = 0;
     try {
-      completed += goalProvider!.dailyGoals.where((g) => g.isCompleted).length;
-    } catch (_) {}
-    try {
-      completed += goalProvider!.mainGoals.where((g) => g.isCompleted).length;
-    } catch (_) {}
+      final uid = userProvider?.user?.id;
+      if (uid == null) return earned;
+
+      // Query DB directly to get accurate counts — NOT from local in-memory list.
+      // The local list is fetched with no date filter and can contain thousands of
+      // historical goals (including duplicates from the AI generation bug), which
+      // would cause users to falsely earn milestone badges.
+      final dailyRows = await _client
+          .from('goal_completions') // source of truth for completed daily goals
+          .select('id')
+          .eq('user_id', uid);
+      completed += (dailyRows as List).length;
+
+      // Count completed main goals from the DB
+      final mainRows = await _client
+          .from('main_goals')
+          .select('id')
+          .eq('user_id', uid)
+          .eq('status', 'completed');
+      completed += (mainRows as List).length;
+
+      debugPrint(
+          'BadgeService._checkGoalsCompletedMilestones: DB count = $completed');
+    } catch (e) {
+      debugPrint('BadgeService._checkGoalsCompletedMilestones: DB query failed ($e), falling back to 0');
+      return earned; // Fail safe: award no badges if we can't get accurate count
+    }
 
     final List<Map<String, dynamic>> milestones = [
       {'count': 1, 'name': 'Starter Vision'},
@@ -428,9 +446,7 @@ class BadgeService {
         'earned_at': DateTime.now().toIso8601String(),
       });
 
-      final xp = (def['xp_reward'] as int?) ?? 0;
       final coins = (def['coin_reward'] as num?)?.toDouble() ?? 0.0;
-      if (xp > 0) await SupabaseService().addXp(xp);
       if (coins > 0) {
         await SupabaseService().addCoins(
           coins,
@@ -480,7 +496,7 @@ class BadgeService {
           .eq('name', badgeName)
           .inFilter('id', userBadgeIds);
 
-      return badgeCheck != null && (badgeCheck as List).isNotEmpty;
+      return (badgeCheck as List).isNotEmpty;
     } catch (e) {
       debugPrint('Error checking user badge "$badgeName": $e');
       return false; // Assume not awarded if check fails
@@ -622,102 +638,106 @@ class BadgeService {
 
   // Check if user has completed 10 health goals
   Future<List<BadgeModel>> _checkHealthyHabitHeroBadge() async {
-    // Add null check for goalProvider and dailyGoals
-    if (goalProvider?.dailyGoals == null) {
-      debugPrint('BadgeService: goalProvider or dailyGoals is null');
-      return [];
-    }
-
-    // Count completed health goals
-    final healthGoals = goalProvider!.dailyGoals
-        .where((goal) => goal.isCompleted && goal.category == 'Health')
-        .length;
-
-    // Check database for existing badge
     final userId = userProvider?.user?.id;
     if (userId == null) return [];
 
-    final hasHealthBadge = await _hasUserBadge(userId, 'Healthy Habit Hero');
+    try {
+      // Query DB directly to avoid reading the inflated local in-memory list
+      final rows = await _client
+          .from('daily_goals')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('is_completed', true)
+          .eq('category', 'health');
+      final healthGoals = (rows as List).length;
 
-    if (healthGoals >= 10 && !hasHealthBadge) {
-      return [
-        BadgeModel(
-          id: 'healthy_habit_hero_${DateTime.now().millisecondsSinceEpoch}',
-          userId: userProvider?.user?.id ?? 'unknown_user',
-          type: BadgeType.healthyHabitHero,
-          earnedDate: DateTime.now(),
-          description: 'Completed 10 health goals',
-        )
-      ];
+      final hasHealthBadge = await _hasUserBadge(userId, 'Healthy Habit Hero');
+
+      if (healthGoals >= 10 && !hasHealthBadge) {
+        return [
+          BadgeModel(
+            id: 'healthy_habit_hero_${DateTime.now().millisecondsSinceEpoch}',
+            userId: userId,
+            type: BadgeType.healthyHabitHero,
+            earnedDate: DateTime.now(),
+            description: 'Completed 10 health goals',
+          )
+        ];
+      }
+    } catch (e) {
+      debugPrint('BadgeService: _checkHealthyHabitHeroBadge DB query failed: $e');
     }
     return [];
   }
 
   // Check if user has completed 10 social goals
   Future<List<BadgeModel>> _checkSocialButterflyBadge() async {
-    // Add null check for goalProvider and dailyGoals
-    if (goalProvider?.dailyGoals == null) {
-      debugPrint('BadgeService: goalProvider or dailyGoals is null');
-      return [];
-    }
-
-    // Count completed social goals
-    final socialGoals = goalProvider!.dailyGoals
-        .where((goal) => goal.isCompleted && goal.category == 'Social')
-        .length;
-
-    // Check database for existing badge
     final userId = userProvider?.user?.id;
     if (userId == null) return [];
 
-    final hasSocialBadge = await _hasUserBadge(userId, 'Social Butterfly');
+    try {
+      // Query DB directly to avoid reading the inflated local in-memory list
+      final rows = await _client
+          .from('daily_goals')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('is_completed', true)
+          .eq('category', 'social');
+      final socialGoals = (rows as List).length;
 
-    if (socialGoals >= 10 && !hasSocialBadge) {
-      return [
-        BadgeModel(
-          id: 'social_butterfly_${DateTime.now().millisecondsSinceEpoch}',
-          userId: userProvider?.user?.id ?? 'unknown_user',
-          type: BadgeType.socialButterfly,
-          earnedDate: DateTime.now(),
-          description: 'Completed 10 social goals',
-        )
-      ];
+      final hasSocialBadge = await _hasUserBadge(userId, 'Social Butterfly');
+
+      if (socialGoals >= 10 && !hasSocialBadge) {
+        return [
+          BadgeModel(
+            id: 'social_butterfly_${DateTime.now().millisecondsSinceEpoch}',
+            userId: userId,
+            type: BadgeType.socialButterfly,
+            earnedDate: DateTime.now(),
+            description: 'Completed 10 social goals',
+          )
+        ];
+      }
+    } catch (e) {
+      debugPrint('BadgeService: _checkSocialButterflyBadge DB query failed: $e');
     }
     return [];
   }
 
   // Check if user has completed 10 academic goals
   Future<List<BadgeModel>> _checkAcademicAceBadge() async {
-    // Add null check for goalProvider and dailyGoals
-    if (goalProvider?.dailyGoals == null) {
-      debugPrint('BadgeService: goalProvider or dailyGoals is null');
-      return [];
-    }
-
-    // Count completed academic goals
-    final academicGoals = goalProvider!.dailyGoals
-        .where((goal) => goal.isCompleted && goal.category == 'Academic')
-        .length;
-
-    // Check database for existing badge
     final userId = userProvider?.user?.id;
     if (userId == null) return [];
 
-    final hasAcademicBadge = await _hasUserBadge(userId, 'Academic Ace');
+    try {
+      // Query DB directly to avoid reading the inflated local in-memory list
+      final rows = await _client
+          .from('daily_goals')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('is_completed', true)
+          .eq('category', 'academic');
+      final academicGoals = (rows as List).length;
 
-    if (academicGoals >= 10 && !hasAcademicBadge) {
-      return [
-        BadgeModel(
-          id: 'academic_ace_${DateTime.now().millisecondsSinceEpoch}',
-          userId: userProvider?.user?.id ?? 'unknown_user',
-          type: BadgeType.academicAce,
-          earnedDate: DateTime.now(),
-          description: 'Completed 10 academic goals',
-        )
-      ];
+      final hasAcademicBadge = await _hasUserBadge(userId, 'Academic Ace');
+
+      if (academicGoals >= 10 && !hasAcademicBadge) {
+        return [
+          BadgeModel(
+            id: 'academic_ace_${DateTime.now().millisecondsSinceEpoch}',
+            userId: userId,
+            type: BadgeType.academicAce,
+            earnedDate: DateTime.now(),
+            description: 'Completed 10 academic goals',
+          )
+        ];
+      }
+    } catch (e) {
+      debugPrint('BadgeService: _checkAcademicAceBadge DB query failed: $e');
     }
     return [];
   }
+
 
   // Check if user has had 10 conversations with Questor
   Future<List<BadgeModel>> _checkQuestorFriendBadge() async {

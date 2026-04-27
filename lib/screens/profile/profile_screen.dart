@@ -166,30 +166,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ],
         ),
         backgroundColor: AppColors.primary,
-        elevation: 4,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(
-            bottom: Radius.circular(16),
-          ),
-        ),
+        elevation: 0,
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // User info card
-            _buildUserInfoCard(context, user),
-            const SizedBox(height: 24),
+      body: Center(
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 900),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // User info card
+                _buildUserInfoCard(context, user),
+                const SizedBox(height: 24),
 
-            // Stats section
-            Text(
-              'My Stats',
-              style: AppTextStyles.heading2,
-            ),
-            const SizedBox(height: 12),
-            _buildStatsGrid(context, user, goalProvider),
-            const SizedBox(height: 24),
+                // Stats section
+                Text(
+                  'My Stats',
+                  style: AppTextStyles.heading2,
+                ),
+                const SizedBox(height: 12),
+                _buildStatsGrid(context, user, goalProvider),
+                const SizedBox(height: 24),
 
             // Badges section
             Row(
@@ -336,6 +334,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
             const SizedBox(height: 24),
           ],
+        ),
+          ),
         ),
       ),
     );

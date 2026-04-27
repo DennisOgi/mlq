@@ -49,59 +49,75 @@ class _GoalsScreenState extends State<GoalsScreen> {
 
         // Show main content when loaded
         return SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Weekly progress graph
-                const WeeklyProgressGraph(),
-                const SizedBox(height: 24),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final isDesktop = constraints.maxWidth > 800;
+              final maxWidth = isDesktop ? 900.0 : double.infinity;
+              
+              return Center(
+                child: Container(
+                  constraints: BoxConstraints(maxWidth: maxWidth),
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.all(isDesktop ? 24 : 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Weekly progress graph
+                        const WeeklyProgressGraph(),
+                        const SizedBox(height: 24),
 
-                // Date selector
-                _buildDateSelector(),
-                const SizedBox(height: 16),
+                        // Date selector
+                        _buildDateSelector(),
+                        const SizedBox(height: 16),
 
-                // Daily goals for selected date
-                _buildDailyGoalsList(),
-                const SizedBox(height: 24),
+                        // Daily goals for selected date
+                        _buildDailyGoalsList(),
+                        const SizedBox(height: 24),
 
-                // Automatic synchronization happens in initGoals() - no manual button needed
+                        // Automatic synchronization happens in initGoals() - no manual button needed
 
-                // Add daily goal button - only for today & limit 3
-                if (AppDateUtils.isToday(_selectedDate))
-                  Consumer<GoalProvider>(builder: (context, goalProvider, _) {
-                    final todaysGoals =
-                        goalProvider.getDailyGoalsForDate(DateTime.now());
-                    final canAddMoreGoals = todaysGoals.length < 3;
+                        // Add daily goal button - only for today & limit 3
+                        if (AppDateUtils.isToday(_selectedDate))
+                          Consumer<GoalProvider>(
+                              builder: (context, goalProvider, _) {
+                            final todaysGoals = goalProvider
+                                .getDailyGoalsForDate(DateTime.now());
+                            final canAddMoreGoals = todaysGoals.length < 3;
 
-                    return QuestButton(
-                      text: canAddMoreGoals
-                          ? 'Add Daily Goal (${todaysGoals.length}/3)'
-                          : 'Daily Goal Limit Reached (3/3)',
-                      icon: canAddMoreGoals ? Icons.add : Icons.check_circle,
-                      type: canAddMoreGoals
-                          ? QuestButtonType.primary
-                          : QuestButtonType.outline,
-                      isFullWidth: true,
-                      onPressed: canAddMoreGoals
-                          ? () => _showAddDailyGoalDialog(context)
-                          : () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'You can only set 3 daily goals per day. Complete or delete existing goals to add more.',
-                                    style: AppTextStyles.body
-                                        .copyWith(color: Colors.white),
-                                  ),
-                                  backgroundColor: AppColors.secondary,
-                                ),
-                              );
-                            },
-                    );
-                  }),
-              ],
-            ),
+                            return QuestButton(
+                              text: canAddMoreGoals
+                                  ? 'Add Daily Goal (${todaysGoals.length}/3)'
+                                  : 'Daily Goal Limit Reached (3/3)',
+                              icon: canAddMoreGoals
+                                  ? Icons.add
+                                  : Icons.check_circle,
+                              type: canAddMoreGoals
+                                  ? QuestButtonType.primary
+                                  : QuestButtonType.outline,
+                              isFullWidth: true,
+                              onPressed: canAddMoreGoals
+                                  ? () => _showAddDailyGoalDialog(context)
+                                  : () {
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            'You can only set 3 daily goals per day. Complete or delete existing goals to add more.',
+                                            style: AppTextStyles.body
+                                                .copyWith(color: Colors.white),
+                                          ),
+                                          backgroundColor: AppColors.secondary,
+                                        ),
+                                      );
+                                    },
+                            );
+                          }),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
           ),
         );
       },
@@ -128,12 +144,7 @@ class _GoalsScreenState extends State<GoalsScreen> {
           ],
         ),
         backgroundColor: AppColors.primary,
-        elevation: 4,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(
-            bottom: Radius.circular(16),
-          ),
-        ),
+        elevation: 0,
       ),
       body: content,
     );

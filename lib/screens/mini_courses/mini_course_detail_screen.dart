@@ -68,8 +68,8 @@ class MiniCourseDetailScreen extends StatelessWidget {
       try {
         return await GlobalDailyCoursesService().isCompleted(
           userId: uid,
-          courseDate: dateKey!,
-          courseIndex: dailyIndex!,
+          courseDate: dateKey,
+          courseIndex: dailyIndex,
         );
       } catch (_) {
         return false;

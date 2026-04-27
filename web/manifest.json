@@ -1,11 +1,11 @@
 {
-    "name": "my_leadership_quest",
-    "short_name": "my_leadership_quest",
+    "name": "My Leadership Quest",
+    "short_name": "MLQ",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#hexcode",
-    "theme_color": "#hexcode",
-    "description": "A new Flutter project.",
+    "background_color": "#1E3A8A",
+    "theme_color": "#1E3A8A",
+    "description": "Transform your leadership journey with daily challenges, AI coaching, and gamified learning experiences.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

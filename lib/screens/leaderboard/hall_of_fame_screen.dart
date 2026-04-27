@@ -955,134 +955,205 @@ class _HallOfFameScreenState extends State<HallOfFameScreen> {
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(20),
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            Colors.white,
-            AppColors.background.withOpacity(0.75),
+            AppColors.surface,
+            AppColors.neumorphicHighlight.withOpacity(0.5),
           ],
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.07),
-            blurRadius: 16,
+            color: AppColors.primary.withOpacity(0.08),
+            blurRadius: 20,
             offset: const Offset(0, 8),
           ),
-        ],
-        border: Border.all(color: AppColors.primary.withOpacity(0.12)),
-      ),
-      child: Row(
-        children: [
-          Stack(
-            clipBehavior: Clip.none,
-            children: [
-              _buildAvatar(e.avatarUrl, e.name),
-              Positioned(
-                top: -8,
-                right: -10,
-                child: Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: crownColor,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: crownColor.withOpacity(0.45),
-                        blurRadius: 14,
-                        spreadRadius: 1,
-                      ),
-                    ],
-                  ),
-                  child: const Icon(
-                    Icons.workspace_premium_rounded,
-                    size: 18,
-                    color: Colors.black,
-                  ),
-                ),
-              ),
-            ],
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        ],
+        border: Border.all(
+          color: AppColors.primary.withOpacity(0.15),
+          width: 1.5,
+        ),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: () => _showChampionPreview(e),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
               children: [
-                Text(
-                  monthLabel,
-                  style: AppTextStyles.caption.copyWith(
-                    color: AppColors.textSecondary,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  (e.name == null || e.name!.trim().isEmpty)
-                      ? 'Champion'
-                      : e.name!.trim(),
-                  style: AppTextStyles.heading2.copyWith(
-                    color: AppColors.primary,
-                    fontWeight: FontWeight.w900,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 4),
-                Row(
+                Stack(
+                  clipBehavior: Clip.none,
                   children: [
-                    Icon(Icons.school_rounded,
-                        size: 16, color: AppColors.textSecondary),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        (e.schoolName == null || e.schoolName!.trim().isEmpty)
-                            ? 'Global Winner'
-                            : e.schoolName!.trim(),
-                        style: AppTextStyles.body.copyWith(
-                          color: AppColors.textSecondary,
-                          fontWeight: FontWeight.w600,
+                    Container(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.primary.withOpacity(0.2),
+                            blurRadius: 12,
+                            spreadRadius: 2,
+                          ),
+                        ],
+                      ),
+                      child: _buildAvatar(e.avatarUrl, e.name),
+                    ),
+                    Positioned(
+                      top: -6,
+                      right: -8,
+                      child: Container(
+                        padding: const EdgeInsets.all(7),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              crownColor,
+                              const Color(0xFFFFA500),
+                            ],
+                          ),
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: crownColor.withOpacity(0.6),
+                              blurRadius: 16,
+                              spreadRadius: 2,
+                            ),
+                          ],
+                          border: Border.all(
+                            color: Colors.white,
+                            width: 2,
+                          ),
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                        child: const Icon(
+                          Icons.workspace_premium_rounded,
+                          size: 16,
+                          color: Colors.black,
+                        ),
                       ),
                     ),
                   ],
                 ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          monthLabel,
+                          style: AppTextStyles.caption.copyWith(
+                            color: AppColors.primary,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        (e.name == null || e.name!.trim().isEmpty)
+                            ? 'Champion'
+                            : e.name!.trim(),
+                        style: AppTextStyles.heading2.copyWith(
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 18,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.school_rounded,
+                            size: 14,
+                            color: AppColors.textSecondary.withOpacity(0.8),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              (e.schoolName == null ||
+                                      e.schoolName!.trim().isEmpty)
+                                  ? 'Global Winner'
+                                  : e.schoolName!.trim(),
+                              style: AppTextStyles.body.copyWith(
+                                color: AppColors.textSecondary,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        AppColors.primary.withOpacity(0.12),
+                        AppColors.secondary.withOpacity(0.08),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: AppColors.primary.withOpacity(0.2),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        'XP',
+                        style: AppTextStyles.caption.copyWith(
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 10,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${e.monthlyXp ?? 0}',
+                        style: AppTextStyles.heading2.copyWith(
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 20,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
-          const SizedBox(width: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-            decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(0.08),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.primary.withOpacity(0.12)),
-            ),
-            child: Column(
-              children: [
-                Text(
-                  'XP',
-                  style: AppTextStyles.caption.copyWith(
-                    color: AppColors.textSecondary,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '${e.monthlyXp ?? 0}',
-                  style: AppTextStyles.bodyBold.copyWith(
-                    color: AppColors.primary,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ],
-            ),
-          )
-        ],
+        ),
       ),
     ).animate().fadeIn(duration: 280.ms).slideX(begin: 0.03, end: 0);
   }

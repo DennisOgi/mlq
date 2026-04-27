@@ -3,9 +3,7 @@ import '../providers/user_provider.dart';
 import '../providers/goal_provider.dart';
 import '../providers/challenge_provider.dart';
 import '../providers/gratitude_provider.dart';
-import '../models/main_goal_model.dart';
 import '../models/daily_goal_model.dart';
-import '../models/challenge_model.dart';
 
 class UserContextService {
   static const UserContextService _instance = UserContextService._internal();
@@ -194,7 +192,7 @@ class UserContextService {
   }
   
   static bool _isGoalRelated(String message) {
-    final goalKeywords = ['goal', 'target', 'objective', 'aim', 'plan', 'achieve', 'accomplish'];
+    final goalKeywords = ['goal', 'target', 'objective', 'aim', 'plan', 'achieve', 'accomplish', 'main goal', 'my goal'];
     return goalKeywords.any((keyword) => message.contains(keyword));
   }
   
@@ -204,7 +202,7 @@ class UserContextService {
   }
   
   static bool _isProgressInquiry(String message) {
-    final progressKeywords = ['how am i doing', 'my progress', 'how far', 'where am i', 'status', 'update', 'report'];
+    final progressKeywords = ['how am i doing', 'my progress', 'how far', 'where am i', 'status', 'update', 'report', 'how am i', 'am i doing'];
     return progressKeywords.any((keyword) => message.contains(keyword));
   }
   
@@ -238,11 +236,18 @@ class UserContextService {
     final responseLength = messageAnalysis['suggestedResponseLength'] as String;
     
     // Build base prompt
-    String prompt = '''You are Questor, a friendly and encouraging AI leadership coach for kids aged 8-16. You help with goal-setting, self-development, and building leadership skills.''';
+    String prompt = '''You are Questor, a friendly and encouraging AI leadership coach for kids aged 8-16. You help with goal-setting, self-development, and building leadership skills.
+
+IMPORTANT: You have access to $userName's profile and progress data below. Use this information to provide personalized, context-aware responses. When they ask about their goals or progress, reference the specific information provided rather than asking them to tell you.''';
     
     // Add user profile only if needed
     if (messageAnalysis['needsUserProfile'] == true) {
       prompt += '''\n\nUSER PROFILE:\n- Name: $userName (Age: $userAge)''';
+      final userLevel = userProfile['level'] as int? ?? 1;
+      final userXp = userProfile['xp'] as int? ?? 0;
+      final userCoins = userProfile['coins'] as double? ?? 0.0;
+      prompt += '''\n- Level: $userLevel (${userXp} XP)''';
+      prompt += '''\n- Coins: ${userCoins.toStringAsFixed(1)}''';
     }
     
     // Add goal context only if relevant
@@ -250,14 +255,27 @@ class UserContextService {
       final completedToday = goalsToday['completed'] as int? ?? 0;
       final totalToday = goalsToday['total'] as int? ?? 0;
       final mainGoalsList = mainGoals['goals'] as List? ?? [];
+      final todayGoalsList = goalsToday['goals'] as List? ?? [];
       
       if (totalToday > 0 || mainGoalsList.isNotEmpty) {
         prompt += '''\n\nGOAL PROGRESS:''';
         if (totalToday > 0) {
           prompt += '''\n- Today: $completedToday/$totalToday daily goals completed''';
+          if (todayGoalsList.isNotEmpty) {
+            prompt += '''\n  Daily Goals:''';
+            for (var goal in todayGoalsList) {
+              final status = goal['completed'] == true ? '✓' : '○';
+              prompt += '''\n  $status ${goal['title']}''';
+            }
+          }
         }
         if (mainGoalsList.isNotEmpty) {
-          prompt += '''\n- Main Goals: ${_formatMainGoalsForPrompt(mainGoalsList)}''';
+          prompt += '''\n- Main Goals:''';
+          for (var goal in mainGoalsList) {
+            final progress = goal['progress'] as int? ?? 0;
+            final category = goal['category'] as String? ?? 'General';
+            prompt += '''\n  • ${goal['title']} ($category) - $progress% complete''';
+          }
         }
       }
     }
@@ -266,15 +284,25 @@ class UserContextService {
     if (messageAnalysis['needsChallengeContext'] == true) {
       final activeChallenges = challenges['active_challenges'] as List? ?? [];
       if (activeChallenges.isNotEmpty) {
-        prompt += '''\n\nACTIVE CHALLENGES:\n${activeChallenges.map((c) => "• ${c['title']}").join('\n')}''';
+        prompt += '''\n\nACTIVE CHALLENGES:''';
+        for (var challenge in activeChallenges) {
+          prompt += '''\n• ${challenge['title']} (${challenge['type']})''';
+        }
       }
     }
     
     // Add progress context only if specifically requested
     if (messageAnalysis['needsProgressContext'] == true) {
       final currentStreak = activity['current_streak'] as int? ?? 0;
-      if (currentStreak > 0) {
-        prompt += '''\n\nCURRENT STREAK: $currentStreak days''';
+      final weeklyRate = activity['weekly_completion_rate'] as int? ?? 0;
+      if (currentStreak > 0 || weeklyRate > 0) {
+        prompt += '''\n\nACTIVITY STATS:''';
+        if (currentStreak > 0) {
+          prompt += '''\n- Current Streak: $currentStreak days 🔥''';
+        }
+        if (weeklyRate > 0) {
+          prompt += '''\n- Weekly Completion Rate: $weeklyRate%''';
+        }
       }
     }
     
@@ -291,7 +319,7 @@ class UserContextService {
         lengthGuideline = 'Provide a balanced response (80-120 words) that addresses their question with helpful insights.';
     }
     
-    prompt += '''\n\nCOACHING GUIDELINES:\n- Use $userName's name naturally when appropriate\n- Be encouraging and age-appropriate for a $userAge-year-old\n- $lengthGuideline\n- Focus on what's most relevant to their message\n- Only reference context information if it directly relates to their question\n- Be genuine and avoid forcing irrelevant information into your response\n\nRespond as Questor would - friendly, supportive, and focused on what $userName actually needs right now!''';
+    prompt += '''\n\nCOACHING GUIDELINES:\n- Use $userName's name naturally when appropriate\n- Be encouraging and age-appropriate for a $userAge-year-old\n- $lengthGuideline\n- When they ask about goals or progress, reference the SPECIFIC information provided above\n- Don't ask them to tell you information you already have access to\n- Be genuine and conversational, using their actual data to provide personalized guidance\n- If they ask "how am I doing" or "what are my goals", tell them based on the data above\n\nRespond as Questor would - friendly, supportive, and knowledgeable about $userName's journey!''';
     
     return prompt;
   }

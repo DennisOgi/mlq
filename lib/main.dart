@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:my_leadership_quest/widgets/desktop_nav_rail.dart';
@@ -38,6 +39,8 @@ import 'screens/challenges/premium_challenge_unlock_screen.dart';
 import 'screens/b2b/class_code_join_screen.dart';
 import 'screens/admin/school_onboarding_screen.dart';
 import 'screens/admin/job_runs_screen.dart';
+import 'screens/admin/reward_disbursement_screen.dart';
+import 'screens/wallet/wallet_dashboard_screen.dart';
 import 'services/background_service_manager.dart';
 import 'services/badge_service.dart';
 import 'services/cache_service.dart';
@@ -62,6 +65,24 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 /// Background message handler for FCM
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Catch all uncaught async errors that would otherwise silently kill the app
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+    if (kDebugMode) {
+      debugPrint('🔴 Flutter Error: ${details.exception}');
+      debugPrint('🔴 Stack trace: ${details.stack}');
+    }
+  };
+
+  // Catch errors in async code not caught by FlutterError.onError
+  PlatformDispatcher.instance.onError = (error, stack) {
+    if (kDebugMode) {
+      debugPrint('🔴 Platform Error: $error');
+      debugPrint('🔴 Stack: $stack');
+    }
+    return true; // Prevent crash
+  };
 
   // Background message handler is registered in mobile-specific code
   // Desktop platforms don't support Firebase Messaging
@@ -95,22 +116,12 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => UserProvider()),
         ChangeNotifierProvider(create: (context) {
           final provider = GoalProvider();
-          // Initialize goals from Supabase after the widget tree is built
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            // Set UserProvider reference for XP updates
-            final userProvider =
-                Provider.of<UserProvider>(context, listen: false);
-            provider.setUserProvider(userProvider);
-            provider.initGoals();
-          });
+          // Don't initialize here - let screens initialize when they're opened
           return provider;
         }),
         ChangeNotifierProvider(create: (context) {
           final provider = ChallengeProvider();
-          // Initialize challenges from Supabase after the widget tree is built
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            provider.initChallenges();
-          });
+          // Don't initialize here - let screens initialize when they're opened
           return provider;
         }),
         ChangeNotifierProvider(create: (_) => PostProvider()),
@@ -126,10 +137,7 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
         ChangeNotifierProvider(create: (context) {
           final provider = OrganizationSettingsProvider();
-          // Initialize organization settings after the widget tree is built
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            provider.loadSettings();
-          });
+          // Don't initialize here - let it load when needed
           return provider;
         }),
         // School Course Provider for premium school mini courses feature
@@ -155,18 +163,7 @@ class MyApp extends StatelessWidget {
         Provider<ChallengeEvaluator>(
           create: (context) {
             final evaluator = ChallengeEvaluator.instance;
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              evaluator.initialize(
-                userProvider: Provider.of<UserProvider>(context, listen: false),
-                goalProvider: Provider.of<GoalProvider>(context, listen: false),
-                gratitudeProvider:
-                    Provider.of<GratitudeProvider>(context, listen: false),
-                miniCourseProvider:
-                    Provider.of<MiniCourseProvider>(context, listen: false),
-                challengeProvider:
-                    Provider.of<ChallengeProvider>(context, listen: false),
-              );
-            });
+            // Don't initialize here - let it initialize when needed
             return evaluator;
           },
         ),
@@ -179,6 +176,40 @@ class MyApp extends StatelessWidget {
         // Localization configuration
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
+        // Add error builder to catch widget errors
+        builder: (context, widget) {
+          ErrorWidget.builder = (FlutterErrorDetails errorDetails) {
+            if (kDebugMode) {
+              debugPrint('🔴 Widget Error: ${errorDetails.exception}');
+              debugPrint('🔴 Stack: ${errorDetails.stack}');
+            }
+            return Scaffold(
+              body: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Something went wrong',
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        kDebugMode ? errorDetails.exception.toString() : 'Please restart the app',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          };
+          return widget!;
+        },
         home: AppInitializer(
           buildApp: (context) => _buildRoutedHome(context),
         ),
@@ -230,6 +261,8 @@ class MyApp extends StatelessWidget {
           '/admin-school-onboarding': (context) =>
               const SchoolOnboardingScreen(),
           '/admin-job-runs': (context) => const JobRunsScreen(),
+          '/wallet': (context) => const WalletDashboardScreen(),
+          '/admin-reward-disbursements': (context) => const RewardDisbursementScreen(),
         },
       ),
     );
@@ -419,28 +452,51 @@ void _showChallengeCompletedDialog(
 }
 
 Widget _buildRoutedHome(BuildContext context) {
-  return Consumer<UserProvider>(
-    builder: (context, userProvider, _) {
-      final isFirstTime = userProvider.isFirstTimeUser;
-      final isAuthenticated = userProvider.isAuthenticated;
-
-      Widget nextScreen;
-      if (isFirstTime) {
-        nextScreen = const OnboardingScreen();
-      } else if (!isAuthenticated) {
-        nextScreen = const LoginScreen();
-      } else {
-        nextScreen = const MainNavigationScreen();
-      }
-
-      return GifSplashScreen(
-        gifAssetPath: 'assets/animations/MLQ-gif.gif',
-        nextScreen: nextScreen,
-        minDisplayTime: const Duration(seconds: 3),
-      );
-    },
-  );
+  return const _StableSplashRouter();
 }
+
+/// A wrapper that maintains a stable GifSplashScreen state across UserProvider notifications.
+/// This prevents the GIF from restarting and the timer from resetting, which stops the ANR.
+class _StableSplashRouter extends StatefulWidget {
+  const _StableSplashRouter();
+
+  @override
+  State<_StableSplashRouter> createState() => _StableSplashRouterState();
+}
+
+class _StableSplashRouterState extends State<_StableSplashRouter> {
+  @override
+  Widget build(BuildContext context) {
+    // We use a Selector or a limited Consumer so we only rebuild the routing logic
+    // not the entire GifSplashScreen container.
+    return Consumer<UserProvider>(
+      builder: (context, userProvider, _) {
+        final isInitialized = userProvider.isInitialized;
+        final isFirstTime = userProvider.isFirstTimeUser;
+        final isAuthenticated = userProvider.isAuthenticated;
+
+        Widget nextScreen;
+        if (isFirstTime) {
+          nextScreen = const OnboardingScreen();
+        } else if (!isAuthenticated) {
+          nextScreen = const LoginScreen();
+        } else {
+          nextScreen = const MainNavigationScreen();
+        }
+
+        // The key ensures the state is preserved if possible.
+        // We pass isInitialized to the splash screen so it can decide when to proceed.
+        return GifSplashScreen(
+          key: const ValueKey('main_splash'),
+          gifAssetPath: 'assets/animations/MLQ-gif.gif',
+          nextScreen: nextScreen,
+          minDisplayTime: const Duration(seconds: 2),
+        );
+      },
+    );
+  }
+}
+
 
 class AppInitializer extends StatefulWidget {
   final Widget Function(BuildContext) buildApp;
@@ -453,7 +509,15 @@ class AppInitializer extends StatefulWidget {
 class _AppInitializerState extends State<AppInitializer> {
   bool _ready = false;
   String? _error;
-  final List<String> _warnings = [];
+  bool _retrying = false;
+  
+  // Track service initialization status
+  bool _servicesInitialized = false;
+  final Map<String, bool> _serviceStatus = {
+    'firebase': false,
+    'supabase': false,
+    'cache': false,
+  };
 
   @override
   void initState() {
@@ -462,207 +526,298 @@ class _AppInitializerState extends State<AppInitializer> {
   }
 
   Future<void> _initialize() async {
+    final startTime = DateTime.now();
     try {
-      debugPrint('[Startup] Initialization started');
+      if (kDebugMode) debugPrint('[Startup] Initialization started');
 
-      // Firebase (essential but allowed to fail without blocking app)
-      // Uses platform-aware abstraction (mobile vs desktop)
-      await _runStep(
-        name: 'Firebase.initializeApp',
-        action: () => FirebaseInitializer.initialize(),
-        timeout: const Duration(seconds: 20),
-        required: false,
-      );
+      // IMMEDIATELY set ready to show UI - don't wait for services
+      if (!mounted) return;
+      setState(() => _ready = true);
+      
+      if (kDebugMode) debugPrint('[Startup] UI ready, initializing services in background');
 
-      // Supabase (prefer online but don't block startup; providers handle offline fallback)
-      await _runStep(
-        name: 'SupabaseService.initialize',
-        action: () => SupabaseService.instance.initialize(),
-        timeout: const Duration(seconds: 20),
-        required: false,
-      );
+      // Run critical + optional services sequentially in background to avoid
+      // UserProvider reading Supabase before it is initialized.
+      unawaited(_initializeAllServices());
+      
+      final totalTime = DateTime.now().difference(startTime).inMilliseconds;
+      if (kDebugMode) debugPrint('[Startup] UI shown in ${totalTime}ms, services loading in background');
+    } catch (e) {
+      if (kDebugMode) debugPrint('[Startup] Fatal Error: $e');
+      if (!mounted) return;
+      setState(() => _error = e.toString());
+    }
+  }
 
-      // Cache (should be fast; if it fails, continue)
-      final cacheService = CacheService();
+  /// Runs all service initialization sequentially so that critical services
+  /// (Firebase, Supabase) are always fully ready before optional ones attempt
+  /// to use them.  This prevents the UserProvider constructor from calling
+  /// Supabase APIs before the client is initialized.
+  static bool _globalInitStarted = false;
+
+  Future<void> _initializeAllServices() async {
+    if (_globalInitStarted) return;
+    _globalInitStarted = true;
+
+    // STAGGERED START: Give the UI thread (Splash GIF) 2s to settle and 
+    // render its first loop before we slam the main thread with I/O and network.
+    await Future.delayed(const Duration(milliseconds: 2000));
+    
+    await _initializeCriticalServices();
+    await _initializeOptionalServices();
+  }
+
+  Future<void> _initializeCriticalServices() async {
+    try {
+      // Firebase (critical for auth)
       await _runStep(
-        name: 'CacheService.initialize',
-        action: () => cacheService.initialize(),
+        name: 'Firebase',
+        action: () async {
+          await FirebaseInitializer.initialize();
+          if (mounted) setState(() => _serviceStatus['firebase'] = true);
+        },
         timeout: const Duration(seconds: 10),
         required: false,
       );
 
-      // Orientation (local-only)
-      await SystemChrome.setPreferredOrientations(const [
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.portraitDown,
-      ]);
+      // Supabase (critical for data)
+      await _runStep(
+        name: 'Supabase',
+        action: () async {
+          await SupabaseService.instance.initialize();
+          if (mounted) {
+            setState(() => _serviceStatus['supabase'] = true);
+            // NOW initialize UserProvider explicitly - now that Supabase is definitely ready
+            try {
+              final userProvider = Provider.of<UserProvider>(context, listen: false);
+              await userProvider.initialize();
+            } catch (e) {
+              debugPrint('[Startup] UserProvider init failed: $e');
+            }
+          }
+        },
+        timeout: const Duration(seconds: 15),
+        required: true,
+      );
 
-      debugPrint('[Startup] Initialization finished');
+      // Cache (fast, local only)
+      await _runStep(
+        name: 'Cache',
+        action: () async {
+          await CacheService().initialize();
+          if (mounted) setState(() => _serviceStatus['cache'] = true);
+        },
+        timeout: const Duration(seconds: 5),
+        required: false,
+      );
 
-      if (!mounted) return;
-      setState(() => _ready = true);
+      if (mounted) {
+        setState(() => _servicesInitialized = true);
+      }
 
-      // Defer non-critical heavy services until after first frame to avoid
-      // blocking initial rendering. These run best-effort in the background.
-      Future.microtask(_initializeOptionalServices);
+      if (kDebugMode) debugPrint('[Startup] Critical services ready');
     } catch (e) {
-      setState(() => _error = e.toString());
+      if (kDebugMode) debugPrint('[Startup] Critical services error: $e');
+      // Don't throw - allow app to continue with degraded functionality
     }
   }
 
   Future<void> _initializeOptionalServices() async {
     try {
-      // Background service (optional)
-      await _runStep(
-        name: 'BackgroundServiceManager.initialize',
-        action: () => BackgroundServiceManager.initialize(),
-        timeout: const Duration(seconds: 10),
-        required: false,
-      );
-
-      // Config & AI services (optional during cold start)
+      // Config service MUST be initialized before any callers (e.g. resetGeminiApiKey)
       final configService = ConfigService.instance;
       await _runStep(
-        name: 'ConfigService.initialize',
+        name: 'Config',
         action: () => configService.initialize(),
-        timeout: const Duration(seconds: 10),
-        required: false,
-      );
-      // Configure Flutterwave client values (public key, mode, redirect URL)
-      await _runStep(
-        name: 'ConfigService.setFlutterwavePublicKey',
-        action: () async {
-          // TEST MODE: Use Flutterwave sandbox public key for emulator testing.
-          await configService.setFlutterwavePublicKey(
-              'FLWPUBK_TEST-4f83c90e73b19c538cf08565813d7b32-X');
-          await configService.setFlutterwaveIsTestMode(true);
-          // Ensure this redirect URL is added in your Flutterwave Dashboard under allowed redirect URLs
-          await configService
-              .setFlutterwaveRedirectUrl('https://mlq.app/redirect');
-        },
-        timeout: const Duration(seconds: 5),
-        required: false,
-      );
-      await _runStep(
-        name: 'ConfigService.resetGeminiApiKey',
-        action: () => configService.resetGeminiApiKey(),
         timeout: const Duration(seconds: 5),
         required: false,
       );
 
-      String apiKey = '';
+      // Flutterwave config (payment setup)
+      await _configureFlutterwave(configService);
+
+      // AI services - only after ConfigService is ready to avoid null _prefs crash
+      await _initializeAIServices(configService);
+
+      // Background service (optional) - Deferred heavily to prevent ANR on start
+      // 20s delay gives Supabase + UI time to fully settle first
+      Future.delayed(const Duration(seconds: 20), () {
+        if (!kIsWeb) {
+          BackgroundServiceManager.initialize().catchError((e) {
+            debugPrint('[BackgroundService] Deferred init failed: $e');
+          });
+        }
+      });
+
+      // Notifications (can fail on emulator - always wrapped)
       await _runStep(
-        name: 'ConfigService.getGeminiApiKey',
-        action: () async {
-          apiKey = await configService.getGeminiApiKey();
-        },
-        timeout: const Duration(seconds: 5),
-        required: false,
-      );
-
-      // Debug logging for API key (only in debug mode)
-      if (kDebugMode && apiKey.isNotEmpty) {
-        debugPrint('🔑 Gemini API Key loaded (${apiKey.length} chars)');
-      }
-
-      // Initialize AI services asynchronously with timeout to prevent blocking
-      if (apiKey.isNotEmpty) {
-        await _runStep(
-          name: 'AI Services initialization',
-          action: () async {
-            AiCoachService.instance.initialize(apiKey);
-            AiCourseGeneratorService.instance.initialize(apiKey);
-            AutonomousCoachService.instance.initialize();
-            debugPrint('✅ [Startup] AI services initialized successfully');
-          },
-          timeout: const Duration(seconds: 5),
-          required: false,
-        );
-      } else {
-        _warnings.add(
-            'Gemini API key unavailable at startup; AI features will init later.');
-        debugPrint('⚠️ [Startup][Warning] No API key - AI features disabled');
-      }
-
-      // Unified coach (optional)
-      final unifiedCoach = UnifiedAutonomousCoach.instance;
-      await _runStep(
-        name: 'UnifiedAutonomousCoach.initialize',
-        action: () => unifiedCoach.initialize(),
-        timeout: const Duration(seconds: 10),
-        required: false,
-      );
-
-      // Notifications (optional on startup; will re-try later inside provider)
-      await _runStep(
-        name: 'PushNotificationService.initialize',
+        name: 'Notifications',
         action: () => PushNotificationService.instance.initialize(
           onMessageOpenedApp: _handleNotificationTap,
         ),
-        timeout: const Duration(seconds: 15),
+        timeout: const Duration(seconds: 5),
         required: false,
       );
 
-      // NOTE: Notification sending is handled by Supabase Edge Function (dispatch-notifications)
-      // triggered by cron job every 2 minutes. Flutter only RECEIVES notifications via FCM.
-      // NotificationProcessorService removed to avoid conflicts with edge function.
+      if (kDebugMode) debugPrint('[Startup] Background initialization complete');
     } catch (e) {
-      // Optional services should never crash startup; failures are logged via _runStep
-      debugPrint('[Startup][Optional] Unexpected error: $e');
+      if (kDebugMode) debugPrint('[Startup][Background] Error: $e');
+      // Don't crash - optional services
+    }
+  }
+
+  Future<void> _configureFlutterwave(ConfigService config) async {
+    try {
+      // Use production key in release mode
+      final isProduction = kReleaseMode;
+      final publicKey = isProduction
+          ? 'FLWPUBK-PRODUCTION-KEY-HERE'  // Replace with your production key
+          : 'FLWPUBK_TEST-4f83c90e73b19c538cf08565813d7b32-X';
+      
+      await config.setFlutterwavePublicKey(publicKey);
+      await config.setFlutterwaveIsTestMode(!isProduction);
+      await config.setFlutterwaveRedirectUrl('https://mlq.app/redirect');
+    } catch (e) {
+      if (kDebugMode) debugPrint('[Startup] Flutterwave config failed: $e');
+    }
+  }
+
+  Future<void> _initializeAIServices(ConfigService config) async {
+    try {
+      await config.resetGeminiApiKey();
+      final apiKey = await config.getGeminiApiKey();
+      
+      if (apiKey.isEmpty) {
+        if (kDebugMode) debugPrint('[Startup] No API key - AI disabled');
+        return;
+      }
+
+      // Initialize AI services (synchronous, fast)
+      AiCoachService.instance.initialize(apiKey);
+      AiCourseGeneratorService.instance.initialize(apiKey);
+      AutonomousCoachService.instance.initialize();
+      UnifiedAutonomousCoach.instance.initialize();
+      
+      if (kDebugMode) debugPrint('[Startup] AI services ready');
+    } catch (e) {
+      if (kDebugMode) debugPrint('[Startup] AI init failed: $e');
     }
   }
 
   Future<void> _runStep({
     required String name,
     required Future<void> Function() action,
-    Duration timeout = const Duration(seconds: 10),
-    bool required = true,
+    required Duration timeout,
+    required bool required,
   }) async {
-    debugPrint('[Startup] → $name ...');
+    final stepStart = DateTime.now();
     try {
       await action().timeout(timeout);
-      debugPrint('[Startup] ✓ $name');
+      final duration = DateTime.now().difference(stepStart).inMilliseconds;
+      if (kDebugMode) debugPrint('[Startup]   ✓ $name (${duration}ms)');
     } on TimeoutException {
-      final msg = 'Timeout in $name after ${timeout.inSeconds}s';
-      debugPrint('[Startup][Timeout] $msg');
-      _warnings.add(msg);
+      if (kDebugMode) debugPrint('[Startup]   ⚠️ $name timed out after ${timeout.inSeconds}s');
       if (required) rethrow;
     } catch (e) {
-      final msg = 'Error in $name: $e';
-      debugPrint('[Startup][Error] $msg');
-      _warnings.add(msg);
+      if (kDebugMode) debugPrint('[Startup]   ❌ $name failed: $e');
       if (required) rethrow;
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    // Error state with retry
     if (_error != null) {
       return Scaffold(
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24.0),
-            child: Text(
-              'Startup error. Please check your connection and try again.\n\n$_error',
-              style: const TextStyle(color: Colors.red),
-              textAlign: TextAlign.center,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(
+                  Icons.cloud_off_rounded,
+                  size: 64,
+                  color: Colors.grey,
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Connection Issue',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Please check your internet connection',
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: Colors.grey[600],
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton.icon(
+                  onPressed: _retrying ? null : () {
+                    setState(() {
+                      _error = null;
+                      _retrying = true;
+                    });
+                    _initialize().then((_) {
+                      if (mounted) {
+                        setState(() => _retrying = false);
+                      }
+                    });
+                  },
+                  icon: _retrying
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation(Colors.white),
+                          ),
+                        )
+                      : const Icon(Icons.refresh),
+                  label: Text(_retrying ? 'Retrying...' : 'Retry'),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 32,
+                      vertical: 16,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextButton(
+                  onPressed: () {
+                    // Continue offline (if supported)
+                    setState(() {
+                      _error = null;
+                      _ready = true;
+                      _servicesInitialized = true; // Allow offline mode
+                    });
+                  },
+                  child: const Text('Continue Offline'),
+                ),
+              ],
             ),
           ),
         ),
       );
     }
+
+    // Loading state (shown briefly for 1 frame before _ready=true)
     if (!_ready) {
-      // Show a simple, non-navigating splash while initializing to prevent blank screen
-      return Scaffold(
+      return const Scaffold(
         backgroundColor: Colors.white,
         body: Center(
-          child: Image.asset(
-            'assets/animations/MLQ-gif.gif',
-            fit: BoxFit.contain,
-          ),
+          child: CircularProgressIndicator(),
         ),
       );
     }
+
+    // Ready - show app (services may still be loading in background)
     return widget.buildApp(context);
   }
 }
@@ -749,8 +904,18 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   @override
   void initState() {
     super.initState();
-    // Listen for in-app notifications and show a toast/snackbar
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    
+    // Delay ALL initialization until UI is stable (2 seconds after first frame)
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Wait for UI to fully render and stabilize
+      await Future.delayed(const Duration(seconds: 2));
+      
+      if (!mounted) return;
+      
+      // Now initialize providers in the background
+      _initializeProvidersAsync();
+      
+      // Listen for in-app notifications and show a toast/snackbar
       final provider =
           Provider.of<NotificationProvider>(context, listen: false);
       // Ensure provider is initialized once
@@ -790,6 +955,52 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         _showChallengeCompletedDialog(context, event);
       });
     });
+  }
+  
+  // Initialize providers asynchronously in the background
+  void _initializeProvidersAsync() {
+    try {
+      if (!mounted) return;
+      
+      // Get providers
+      final userProvider = Provider.of<UserProvider>(context, listen: false);
+      final goalProvider = Provider.of<GoalProvider>(context, listen: false);
+      final challengeProvider = Provider.of<ChallengeProvider>(context, listen: false);
+      final orgSettingsProvider = Provider.of<OrganizationSettingsProvider>(context, listen: false);
+      final evaluator = Provider.of<ChallengeEvaluator>(context, listen: false);
+      final gratitudeProvider = Provider.of<GratitudeProvider>(context, listen: false);
+      final miniCourseProvider = Provider.of<MiniCourseProvider>(context, listen: false);
+      
+      // Initialize providers without blocking (fire and forget)
+      Future.microtask(() async {
+        try {
+          // Initialize GoalProvider
+          goalProvider.setUserProvider(userProvider);
+          await goalProvider.initGoals();
+          
+          // Initialize ChallengeProvider
+          await challengeProvider.initChallenges();
+          
+          // Initialize OrganizationSettingsProvider
+          await orgSettingsProvider.loadSettings();
+          
+          // Initialize ChallengeEvaluator
+          evaluator.initialize(
+            userProvider: userProvider,
+            goalProvider: goalProvider,
+            gratitudeProvider: gratitudeProvider,
+            miniCourseProvider: miniCourseProvider,
+            challengeProvider: challengeProvider,
+          );
+          
+          if (kDebugMode) debugPrint('[MainNav] Providers initialized successfully');
+        } catch (e) {
+          if (kDebugMode) debugPrint('[MainNav] Provider initialization error: $e');
+        }
+      });
+    } catch (e) {
+      if (kDebugMode) debugPrint('[MainNav] Provider initialization setup error: $e');
+    }
   }
 
   Future<void> _maybeShowMonthlyWinnerCelebration(

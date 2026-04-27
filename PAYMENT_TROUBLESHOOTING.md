@@ -90,10 +90,12 @@ The app now provides detailed guidance when payments fail:
 
 ### Alternative Payment Methods ✅ ENABLED
 
-The app now supports multiple payment options:
+The app now supports all payment options available in your region:
 - **Card** (Visa, Mastercard, Verve)
 - **Bank Transfer**
 - **USSD**
+- **Google Pay / Apple Pay** (if configured)
+- **Other Local Methods** (as configured in the Flutterwave dashboard)
 
 Users can select their preferred method during checkout.
 

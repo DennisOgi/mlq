@@ -128,7 +128,7 @@ class CommunityCourseService {
         return [];
       }
 
-      final memberCommunityIds = (membershipResponse as List)
+      final memberCommunityIds = (membershipResponse)
           .map((m) => m['community_id'] as String)
           .toList();
 
@@ -147,7 +147,7 @@ class CommunityCourseService {
       }
 
       // Step 3: Get user's progress for these courses
-      final courseIds = (response as List).map((c) => c['id'] as String).toList();
+      final courseIds = (response).map((c) => c['id'] as String).toList();
       final progressResponse = await _supabase
           .from('user_community_course_progress')
           .select('community_course_id, completed, score')
@@ -159,7 +159,7 @@ class CommunityCourseService {
         progressMap[p['community_course_id'] as String] = p;
       }
 
-      return (response as List).map((json) {
+      return (response).map((json) {
         final courseId = json['id'] as String;
         final progress = progressMap[courseId];
         final communityData = json['communities'] as Map<String, dynamic>?;

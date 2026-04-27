@@ -339,12 +339,9 @@ class GoalProvider extends ChangeNotifier {
   Future<void> _loadMainGoals() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      // Only load if authenticated and user ID is available
       if (!_supabaseService.isAuthenticated ||
           _supabaseService.currentUser?.id == null) {
         _mainGoals = [];
-        debugPrint(
-            'No main goals loaded - user not authenticated or no user ID');
         return;
       }
 
@@ -352,21 +349,21 @@ class GoalProvider extends ChangeNotifier {
       final mainGoalsString = prefs.getString(key);
 
       if (mainGoalsString != null && mainGoalsString.isNotEmpty) {
-        final List<dynamic> mainGoalsJson = jsonDecode(mainGoalsString);
-        _mainGoals =
-            mainGoalsJson.map((json) => MainGoalModel.fromJson(json)).toList();
-        debugPrint(
-            'Loaded ${_mainGoals.length} main goals from local storage for user ${_supabaseService.currentUser!.id}');
+        // Use compute to parse main goals off-thread
+        _mainGoals = await compute(_parseMainGoals, mainGoalsString);
+        debugPrint('Loaded ${_mainGoals.length} main goals from local storage');
       } else {
-        // Initialize with empty list if none are stored
         _mainGoals = [];
-        debugPrint(
-            'No stored main goals found for user ${_supabaseService.currentUser!.id}');
       }
     } catch (e) {
       debugPrint('Error loading main goals: $e');
       _mainGoals = [];
     }
+  }
+
+  static List<MainGoalModel> _parseMainGoals(String jsonString) {
+    final List<dynamic> jsonList = jsonDecode(jsonString);
+    return jsonList.map((json) => MainGoalModel.fromJson(json)).toList();
   }
 
   // Save daily goals to SharedPreferences
@@ -386,12 +383,9 @@ class GoalProvider extends ChangeNotifier {
   Future<void> _loadDailyGoals() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      // Only load if authenticated and user ID is available
       if (!_supabaseService.isAuthenticated ||
           _supabaseService.currentUser?.id == null) {
         _dailyGoals = [];
-        debugPrint(
-            'No daily goals loaded - user not authenticated or no user ID');
         return;
       }
 
@@ -399,21 +393,40 @@ class GoalProvider extends ChangeNotifier {
       final dailyGoalsString = prefs.getString(key);
 
       if (dailyGoalsString != null && dailyGoalsString.isNotEmpty) {
-        final List<dynamic> dailyGoalsJson = jsonDecode(dailyGoalsString);
-        _dailyGoals = dailyGoalsJson
-            .map((json) => DailyGoalModel.fromJson(json))
-            .toList();
-        debugPrint(
-            'Loaded ${_dailyGoals.length} daily goals from storage for user ${_supabaseService.currentUser!.id}');
+        // Use compute to parse daily goals off-thread
+        _dailyGoals = await compute(_parseDailyGoals, dailyGoalsString);
+
+        // Retention Policy: keep 60 days or max 500 items to prevent startup lag
+        final initialCount = _dailyGoals.length;
+        final retentionLimit = DateTime.now().subtract(const Duration(days: 60));
+        
+        // Remove old goals (keep temp goals as they are not yet synced)
+        _dailyGoals.removeWhere((g) => g.date.isBefore(retentionLimit) && !g.id.startsWith('temp_'));
+
+        // If still too many, keep only most recent 500
+        if (_dailyGoals.length > 500) {
+          _dailyGoals.sort((a,b) => b.date.compareTo(a.date));
+          _dailyGoals = _dailyGoals.take(500).toList();
+        }
+
+        if (_dailyGoals.length < initialCount) {
+          debugPrint('Pruned ${initialCount - _dailyGoals.length} old daily goals from cache');
+          await _saveDailyGoals(); // Persist the trimmed list
+        }
+
+        debugPrint('Loaded ${_dailyGoals.length} daily goals from storage');
       } else {
         _dailyGoals = [];
-        debugPrint(
-            'No stored daily goals found for user ${_supabaseService.currentUser!.id}');
       }
     } catch (e) {
       debugPrint('Error loading daily goals: $e');
       _dailyGoals = [];
     }
+  }
+
+  static List<DailyGoalModel> _parseDailyGoals(String jsonString) {
+    final List<dynamic> jsonList = jsonDecode(jsonString);
+    return jsonList.map((json) => DailyGoalModel.fromJson(json)).toList();
   }
 
   // Explicitly clear goals and their persisted cache for current user scope

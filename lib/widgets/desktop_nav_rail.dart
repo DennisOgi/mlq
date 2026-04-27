@@ -15,49 +15,73 @@ class DesktopNavRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return NavigationRail(
-      selectedIndex: currentIndex,
-      onDestinationSelected: onDestinationSelected,
-      labelType: NavigationRailLabelType.all,
-      backgroundColor: Colors.white,
-      groupAlignment: 0.0,
-      elevation: 5,
-      selectedLabelTextStyle: const TextStyle(
-        color: AppColors.primary,
-        fontWeight: FontWeight.bold,
-        fontSize: 12,
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            AppColors.primary,
+            AppColors.primary.withValues(alpha: 0.95),
+          ],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primary.withValues(alpha: 0.3),
+            blurRadius: 15,
+            spreadRadius: 2,
+            offset: const Offset(2, 0),
+          ),
+        ],
       ),
-      unselectedLabelTextStyle: TextStyle(
-        color: Colors.grey.shade600,
-        fontWeight: FontWeight.normal,
-        fontSize: 12,
-      ),
-      selectedIconTheme: const IconThemeData(
-        color: AppColors.primary,
-        size: 28,
-      ),
-      unselectedIconTheme: IconThemeData(
-        color: Colors.grey.shade500,
-        size: 24,
-      ),
-      destinations: items.map((item) {
-        return NavigationRailDestination(
-          icon: Icon(item.icon),
-          selectedIcon: Icon(item.activeIcon),
-          label: Text(item.label),
-          padding: const EdgeInsets.symmetric(vertical: 12),
-        );
-      }).toList(),
-      leading: Padding(
-        padding: const EdgeInsets.only(bottom: 20, top: 20),
-        child: Image.asset(
-          'assets/images/questor 9.png', // Using app icon as logo
-          width: 48,
-          height: 48,
-          errorBuilder: (context, error, stackTrace) => const Icon(
-            Icons.school_rounded,
-            size: 40,
-            color: AppColors.primary,
+      child: NavigationRail(
+        selectedIndex: currentIndex,
+        onDestinationSelected: onDestinationSelected,
+        labelType: NavigationRailLabelType.all,
+        backgroundColor: Colors.transparent,
+        groupAlignment: 0.0,
+        selectedLabelTextStyle: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.bold,
+          fontSize: 13,
+        ),
+        unselectedLabelTextStyle: const TextStyle(
+          color: Colors.white60,
+          fontWeight: FontWeight.w500,
+          fontSize: 11,
+        ),
+        selectedIconTheme: const IconThemeData(
+          color: Colors.white,
+          size: 28,
+        ),
+        unselectedIconTheme: const IconThemeData(
+          color: Colors.white60,
+          size: 24,
+        ),
+        indicatorColor: Colors.white.withValues(alpha: 0.2),
+        indicatorShape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        useIndicator: true,
+        destinations: items.map((item) {
+          return NavigationRailDestination(
+            icon: Icon(item.icon),
+            selectedIcon: Icon(item.activeIcon),
+            label: Text(item.label),
+            padding: const EdgeInsets.symmetric(vertical: 8),
+          );
+        }).toList(),
+        leading: Padding(
+          padding: const EdgeInsets.only(bottom: 20, top: 20),
+          child: Image.asset(
+            'assets/images/questor 9.png',
+            width: 48,
+            height: 48,
+            errorBuilder: (context, error, stackTrace) => const Icon(
+              Icons.school_rounded,
+              size: 40,
+              color: Colors.white,
+            ),
           ),
         ),
       ),

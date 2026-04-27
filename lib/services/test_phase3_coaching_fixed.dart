@@ -287,7 +287,7 @@ class Phase3CoachingTestFixed {
       final success = message != null && message.content.isNotEmpty;
       debugPrint(success ? '✅ Quick Test: PASSED' : '❌ Quick Test: FAILED');
       
-      if (success && message != null) {
+      if (success) {
         debugPrint('📝 Generated message type: ${message.type}');
         debugPrint('💜 Emotional tone: ${message.emotionalTone}');
         debugPrint('📄 Content preview: ${message.content.length > 100 ? '${message.content.substring(0, 100)}...' : message.content}');

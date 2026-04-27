@@ -25,6 +25,10 @@ class UserModel {
   final int? rank; // optional, used in leaderboard contexts
   // Trial status
   final DateTime? trialEndsAt;
+  // LeadWallet fields
+  final double walletBalance;
+  final String walletStatus; // inactive, pending_consent, active, frozen
+  final DateTime? walletActivatedAt;
   final String? subscriptionStatus; // 'free', 'trial', 'active', 'expired'
   
   // Returns true if the user has a parent email set up
@@ -64,7 +68,16 @@ class UserModel {
     this.rank,
     this.trialEndsAt,
     this.subscriptionStatus,
+    this.walletBalance = 0.0,
+    this.walletStatus = 'inactive',
+    this.walletActivatedAt,
   });
+
+  /// Whether the wallet is active and ready to use
+  bool get isWalletActive => walletStatus == 'active';
+
+  /// Whether wallet activation is pending parent consent
+  bool get isWalletPendingConsent => walletStatus == 'pending_consent';
 
     UserModel copyWith({
     String? id,
@@ -89,6 +102,9 @@ class UserModel {
     String? schoolId,
     String? schoolName,
     int? rank,
+    double? walletBalance,
+    String? walletStatus,
+    DateTime? walletActivatedAt,
     DateTime? trialEndsAt,
     String? subscriptionStatus,
   }) {
@@ -117,6 +133,9 @@ class UserModel {
       rank: rank ?? this.rank,
       trialEndsAt: trialEndsAt ?? this.trialEndsAt,
       subscriptionStatus: subscriptionStatus ?? this.subscriptionStatus,
+      walletBalance: walletBalance ?? this.walletBalance,
+      walletStatus: walletStatus ?? this.walletStatus,
+      walletActivatedAt: walletActivatedAt ?? this.walletActivatedAt,
     );
   }
 
@@ -146,6 +165,9 @@ class UserModel {
       'rank': rank,
       'trialEndsAt': trialEndsAt?.toIso8601String(),
       'subscriptionStatus': subscriptionStatus,
+      'walletBalance': walletBalance,
+      'walletStatus': walletStatus,
+      'walletActivatedAt': walletActivatedAt?.toIso8601String(),
     };
   }
 
@@ -177,6 +199,11 @@ class UserModel {
           ? DateTime.parse(json['trial_ends_at']) 
           : null,
       subscriptionStatus: json['subscription_status'],
+      walletBalance: (json['wallet_balance'] as num?)?.toDouble() ?? 0.0,
+      walletStatus: json['wallet_status'] as String? ?? 'inactive',
+      walletActivatedAt: json['wallet_activated_at'] != null
+          ? DateTime.parse(json['wallet_activated_at'])
+          : null,
     );
   }
 

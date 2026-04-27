@@ -30,6 +30,18 @@ class AdminService {
     }
   }
 
+  Future<List<Map<String, dynamic>>> getTopUsersPerSchool({int limit = 3}) async {
+    try {
+      final response = await _client.rpc('get_top_users_per_school', params: {
+        'limit_val': limit
+      });
+      return List<Map<String, dynamic>>.from(response as List);
+    } catch (e) {
+      debugPrint('Error fetching top users per school: $e');
+      return [];
+    }
+  }
+
   Future<int> sendMonthlyWinnersCongrats({DateTime? now}) async {
     try {
       final n = now ?? DateTime.now();

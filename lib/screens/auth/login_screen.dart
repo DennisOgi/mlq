@@ -10,6 +10,7 @@ import '../../theme/app_colors.dart' as theme;
 import '../../theme/app_text_styles.dart' as theme;
 import '../../widgets/quest_button.dart';
 import 'signup_screen.dart';
+import 'forgot_password_screen.dart';
 import '../legal/legal_markdown_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -176,6 +177,7 @@ class _LoginScreenState extends State<LoginScreen> {
         });
       } else {
         final detailed = userProvider.lastErrorMessage;
+        if (!mounted) return;
         setState(() {
           _errorMessage = detailed ??
               'Oops! Your email or password doesn\'t match our records.';
@@ -184,6 +186,7 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } catch (e) {
       final friendly = ErrorHandler.toMessage(e);
+      if (!mounted) return;
       setState(() {
         _errorMessage = friendly;
         _isLoading = false;
@@ -351,8 +354,28 @@ class _LoginScreenState extends State<LoginScreen> {
                   ).animate().fadeIn(duration: 600.ms, delay: 1000.ms),
                   const SizedBox(height: 16),
 
-                  // Forgot password temporarily hidden until production-ready
-                  const SizedBox.shrink(),
+                  // Forgot password link
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => ForgotPasswordScreen(),
+                          ),
+                        );
+                      },
+                      child: Text(
+                        'Forgot Password?',
+                        style: TextStyle(
+                          color: theme.AppColors.primary,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
                   const SizedBox(height: 8),
 
                   // Sign up option

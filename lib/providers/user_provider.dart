@@ -382,9 +382,22 @@ class UserProvider extends ChangeNotifier {
   }
 
   // Initialize with user data from Supabase if available
+  // Uses a short delay so that Supabase (initialized in _initializeCriticalServices)
+  // is ready before we query it. The UI shows the splash screen during this window,
+  // so users see no difference.
   UserProvider() {
-    _initializeUser();
     _loadAvatarData();
+  }
+
+  bool _isInitialized = false;
+  bool get isInitialized => _isInitialized;
+
+  /// Explicitly initialize the user state. 
+  /// Calleable from main.dart once Supabase is confirmed ready.
+  Future<void> initialize() async {
+    await _initializeUser();
+    _isInitialized = true;
+    notifyListeners();
   }
   
   // Login method
@@ -565,37 +578,60 @@ class UserProvider extends ChangeNotifier {
 
   Future<void> _initializeUser() async {
     try {
-      // Check if first time user
       final prefs = await SharedPreferences.getInstance();
-      _isFirstTimeUser = prefs.getBool('isFirstTimeUser') ?? true;
+      
+      // IMPROVED: Check authentication status first to avoid onboarding loop on web
+      if (_supabaseService.isAuthenticated) {
+        // User is logged in → definitely not first time
+        _isFirstTimeUser = false;
+        await prefs.setBool('isFirstTimeUser', false);
+      } else {
+        // Check if user has ever completed registration
+        final hasCompletedRegistration = prefs.getBool('hasCompletedRegistration') ?? false;
+        if (hasCompletedRegistration) {
+          // User has registered before → not first time
+          _isFirstTimeUser = false;
+        } else {
+          // Check SharedPreferences for first-time flag
+          _isFirstTimeUser = prefs.getBool('isFirstTimeUser') ?? true;
+        }
+      }
 
       // OFFLINE-FIRST APPROACH: Load cached data immediately
       await _loadCachedData();
 
       // If we have cached user data, use it while attempting online sync
       if (_user != null && _supabaseService.isAuthenticated) {
-        debugPrint('🔄 Using cached data, attempting online sync...');
-        _attemptOnlineSync();
+        _isFirstTimeUser = false; // WE HAVE CACHED DATA + AUTH: Not first time
+        debugPrint('🔄 Using cached data, triggering background online sync...');
+        
+        // Use microtask to ensure we return from initialize() instantly
+        // and let the event loop process UI frames before starting sync.
+        Future.microtask(() => _attemptOnlineSync());
+        
+        notifyListeners(); // Added notify here so UI can update to 'Not first time'
         return;
       }
 
       // Try to load user from Supabase if authenticated and no cached data
       if (_supabaseService.isAuthenticated) {
         try {
-          // Attempt to load user profile from Supabase
           final freshUser = await _supabaseService.getUserProfile();
           if (freshUser != null) {
             _user = freshUser;
             _isAuthenticated = true;
+            _isFirstTimeUser = false; // FOUND USER: Not a first-time user
             debugPrint('✅ User loaded from Supabase: ${_user?.name}');
+            
+            // Persist the first-time flag locally so we remember next time
+            prefs.setBool('isFirstTimeUser', false);
             
             // Cache the fresh data
             await _offlineService.cacheUserProfile(_user!);
             
-            // Load user badges after successful user load
+            // Load user data in background without notifying for each step
+            // We'll notify once at the end of this block
             await loadUserBadges();
-
-            // Refresh entitlements so premium gates reflect immediately
             await refreshEntitlements();
             
             // Sync FCM token for push notifications (existing session)

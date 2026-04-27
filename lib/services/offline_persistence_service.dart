@@ -103,15 +103,18 @@ class OfflinePersistenceService {
       final prefs = await SharedPreferences.getInstance();
       final leaderboardJson = prefs.getString(_leaderboardKey);
       if (leaderboardJson != null) {
-        final List<dynamic> usersData = jsonDecode(leaderboardJson);
-        final users = usersData.map((data) => UserModel.fromJson(data)).toList();
-        debugPrint('📱 Loaded cached leaderboard: ${users.length} users');
-        return users;
+        // Use compute to decode and map large lists off the main thread
+        return await compute(_parseLeaderboard, leaderboardJson);
       }
     } catch (e) {
       debugPrint('❌ Error loading cached leaderboard: $e');
     }
     return [];
+  }
+
+  static List<UserModel> _parseLeaderboard(String jsonString) {
+    final List<dynamic> usersData = jsonDecode(jsonString);
+    return usersData.map((data) => UserModel.fromJson(data)).toList();
   }
 
   // School leaderboard persistence
@@ -131,10 +134,8 @@ class OfflinePersistenceService {
       final prefs = await SharedPreferences.getInstance();
       final leaderboardJson = prefs.getString(_schoolLeaderboardKey);
       if (leaderboardJson != null) {
-        final List<dynamic> usersData = jsonDecode(leaderboardJson);
-        final users = usersData.map((data) => UserModel.fromJson(data)).toList();
-        debugPrint('📱 Loaded cached school leaderboard: ${users.length} users');
-        return users;
+        // Use compute to parse school leaderboard off-thread
+        return await compute(_parseLeaderboard, leaderboardJson);
       }
     } catch (e) {
       debugPrint('❌ Error loading cached school leaderboard: $e');
@@ -158,15 +159,17 @@ class OfflinePersistenceService {
       final prefs = await SharedPreferences.getInstance();
       final schoolsJson = prefs.getString(_schoolsKey);
       if (schoolsJson != null) {
-        final List<dynamic> schoolsData = jsonDecode(schoolsJson);
-        final schools = schoolsData.cast<Map<String, dynamic>>();
-        debugPrint('📱 Loaded cached schools: ${schools.length} schools');
-        return schools;
+        return await compute(_parseSchools, schoolsJson);
       }
     } catch (e) {
       debugPrint('❌ Error loading cached schools: $e');
     }
     return [];
+  }
+
+  static List<Map<String, dynamic>> _parseSchools(String jsonString) {
+    final List<dynamic> schoolsData = jsonDecode(jsonString);
+    return schoolsData.cast<Map<String, dynamic>>();
   }
 
   // Pending actions for offline operations

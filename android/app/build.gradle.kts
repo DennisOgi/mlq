@@ -20,7 +20,7 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "com.mlq.my_leadership_quest"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = "28.0.12674087"
 
     compileOptions {
@@ -49,7 +49,7 @@ android {
     defaultConfig {
         applicationId = "com.mlq.my_leadership_quest"
         minSdk = 24  // Updated from flutter.minSdkVersion (23) to meet Flutter's upcoming requirement
-        targetSdk = flutter.targetSdkVersion
+        targetSdk = 34
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         
@@ -103,4 +103,7 @@ dependencies {
     // Android 15 edge-to-edge support - updated to latest stable versions
     implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")
+
+    // Amazon Appstore SDK (v3.0+) for DRM and IAP integration
+    implementation("com.amazon.device:amazon-appstore-sdk:3.0.5")
 }

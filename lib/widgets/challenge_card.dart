@@ -166,7 +166,7 @@ class ChallengeCard extends StatelessWidget {
           
           // Challenge content
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -238,7 +238,7 @@ class ChallengeCard extends StatelessWidget {
                 
                 // Date range
                 Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
                   child: Row(
                     children: [
                       const Icon(
@@ -261,13 +261,13 @@ class ChallengeCard extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
                             color: challenge.daysRemaining <= 3 
-                                ? Colors.orange.withOpacity(0.1) 
-                                : AppColors.primary.withOpacity(0.1),
+                                ? Colors.orange.withValues(alpha: 0.1)
+                                : AppColors.primary.withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(
                               color: challenge.daysRemaining <= 3 
-                                  ? Colors.orange.withOpacity(0.3) 
-                                  : AppColors.primary.withOpacity(0.3),
+                                  ? Colors.orange.withValues(alpha: 0.3)
+                                  : AppColors.primary.withValues(alpha: 0.3),
                             ),
                           ),
                           child: Text(

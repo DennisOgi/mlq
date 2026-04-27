@@ -182,6 +182,7 @@ class _SignupScreenState extends State<SignupScreen> {
       });
     } catch (e) {
       final message = 'Error creating account: ${e.toString()}';
+      if (!mounted) return;
       setState(() {
         _errorMessage = message;
         _isLoading = false;

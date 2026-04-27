@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../providers/user_provider.dart';
 import '../../models/badge_model.dart';
 import '../../services/badge_service.dart';
+import '../../constants/app_constants.dart';
 
 class BadgesScreen extends StatefulWidget {
   const BadgesScreen({super.key});
@@ -41,10 +42,19 @@ class _BadgesScreenState extends State<BadgesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('My Badges'),
-        backgroundColor: Colors.deepPurple,
-        foregroundColor: Colors.white,
+        title: Text('My Badges', style: AppTextStyles.heading2.copyWith(color: AppColors.primary)),
+        backgroundColor: Colors.transparent,
+        flexibleSpace: Container(
+          decoration: NeumorphicStyles.standard.copyWith(
+             borderRadius: const BorderRadius.only(
+               bottomLeft: Radius.circular(20),
+               bottomRight: Radius.circular(20),
+             ),
+          ),
+        ),
+        iconTheme: const IconThemeData(color: AppColors.primary),
         elevation: 0,
+        centerTitle: true,
       ),
       body: Consumer<UserProvider>(
         builder: (context, userProvider, child) {
@@ -58,42 +68,50 @@ class _BadgesScreenState extends State<BadgesScreen> {
 
           if (badges.isEmpty) {
             return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.emoji_events_outlined,
-                    size: 80,
-                    color: Colors.grey[400],
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'No badges earned yet',
-                    style: TextStyle(
-                      fontSize: 18,
-                      color: Colors.grey[600],
-                      fontWeight: FontWeight.w500,
+              child: Container(
+                margin: const EdgeInsets.all(24),
+                padding: const EdgeInsets.all(32),
+                decoration: NeumorphicStyles.large,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(24),
+                      decoration: NeumorphicStyles.pressed.copyWith(shape: BoxShape.circle),
+                      child: const Icon(
+                        Icons.workspace_premium_outlined,
+                        size: 80,
+                        color: AppColors.primary,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Complete goals and challenges to earn badges!',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[500],
+                    const SizedBox(height: 24),
+                    Text(
+                      'No Badges Yet',
+                      style: AppTextStyles.heading2,
                     ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 24),
-                  ElevatedButton(
-                    onPressed: _checkForNewBadges,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.deepPurple,
-                      foregroundColor: Colors.white,
+                    const SizedBox(height: 12),
+                    Text(
+                      'Complete goals and challenges to earn premium leadership badges!',
+                      style: AppTextStyles.body,
+                      textAlign: TextAlign.center,
                     ),
-                    child: const Text('Check for New Badges'),
-                  ),
-                ],
+                    const SizedBox(height: 32),
+                    Container(
+                      decoration: NeumorphicStyles.standard,
+                      child: TextButton(
+                        onPressed: _checkForNewBadges,
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                        ),
+                        child: Text(
+                          'Check for New Badges',
+                          style: AppTextStyles.button.copyWith(color: AppColors.primary),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             );
           }
@@ -130,16 +148,18 @@ class _BadgesScreenState extends State<BadgesScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  SizedBox(
+                  Container(
                     width: double.infinity,
-                    child: ElevatedButton(
+                    decoration: NeumorphicStyles.standard,
+                    child: TextButton(
                       onPressed: _checkForNewBadges,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.deepPurple,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
                       ),
-                      child: const Text('Check for New Badges'),
+                      child: Text(
+                        'Check for New Badges',
+                        style: AppTextStyles.button.copyWith(color: AppColors.primary),
+                      ),
                     ),
                   ),
                 ],
@@ -152,11 +172,8 @@ class _BadgesScreenState extends State<BadgesScreen> {
   }
 
   Widget _buildBadgeCard(BadgeModel badge) {
-    return Card(
-      elevation: 4,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
+    return Container(
+      decoration: NeumorphicStyles.standard,
       child: Padding(
         padding: const EdgeInsets.all(12.0),
         child: Column(
@@ -164,12 +181,13 @@ class _BadgesScreenState extends State<BadgesScreen> {
           children: [
             // Badge Image
             Container(
-              width: 60,
-              height: 60,
-              decoration: BoxDecoration(
+              width: 65,
+              height: 65,
+              decoration: NeumorphicStyles.pressed.copyWith(
                 shape: BoxShape.circle,
-                color: Colors.deepPurple.withOpacity(0.1),
+                color: Colors.white,
               ),
+              padding: const EdgeInsets.all(8),
               child: Image.asset(
                 badge.imageAsset,
                 width: 40,

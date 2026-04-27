@@ -173,6 +173,28 @@ class SupabaseService {
   static const _host = 'hcvyumbkonrisrxbjnst.supabase.co';
   static const _defaultTimeout = Duration(seconds: 12);
 
+  // Web-compatible connectivity check
+  Future<void> _checkConnectivity({Duration timeout = const Duration(seconds: 3)}) async {
+    if (kIsWeb) {
+      // On web, skip DNS lookup (not supported) - let the actual API call handle connectivity
+      return;
+    }
+    
+    // On native platforms, do DNS lookup for quick connectivity check
+    try {
+      final result = await InternetAddress.lookup(_host).timeout(timeout);
+      if (result.isEmpty) {
+        throw const SocketException('DNS lookup returned no results');
+      }
+    } on TimeoutException catch (_) {
+      throw Exception(
+          'Connection timed out while reaching the server. Please check your internet and try again.');
+    } on SocketException catch (e) {
+      throw Exception(
+          'Cannot reach authentication server. Check your internet connection. Details: ${e.message}');
+    }
+  }
+
   // Initialize Supabase
   Future<void> initialize() async {
     try {
@@ -593,12 +615,18 @@ class SupabaseService {
   // See _mapToUserModel method below
 
   // Check if user is authenticated
+  // Safe to call even before Supabase.initialize() completes — returns false if not ready.
   bool get isAuthenticated {
-    final user = client.auth.currentUser;
-    final isAuth = user != null;
-    debugPrint(
-        'isAuthenticated check: user ${isAuth ? "exists" : "is null"} (${user?.email ?? "no email"}) - session: ${client.auth.currentSession != null ? "exists" : "is null"}');
-    return isAuth;
+    try {
+      final user = client.auth.currentUser;
+      final isAuth = user != null;
+      debugPrint(
+          'isAuthenticated check: user ${isAuth ? "exists" : "is null"} (${user?.email ?? "no email"}) - session: ${client.auth.currentSession != null ? "exists" : "is null"}');
+      return isAuth;
+    } catch (_) {
+      // Supabase not yet initialized — treat as unauthenticated
+      return false;
+    }
   }
 
   // Check if a user is an admin
@@ -626,18 +654,10 @@ class SupabaseService {
     try {
       // Quick connectivity preflight (DNS/host reachability) - with longer timeout
       try {
-        final result = await InternetAddress.lookup(_host)
-            .timeout(const Duration(seconds: 8));
-        if (result.isEmpty) {
-          throw const SocketException('DNS lookup returned no results');
-        }
-      } on TimeoutException catch (_) {
+        await _checkConnectivity(timeout: const Duration(seconds: 8));
+      } catch (e) {
         debugPrint(
-            'DNS lookup timeout - network may be slow but continuing with signup attempt');
-        // Don't throw here, let the actual signup attempt handle network issues
-      } on SocketException catch (e) {
-        debugPrint(
-            'DNS lookup failed: ${e.message} - continuing with signup attempt');
+            'Connectivity check failed: $e - continuing with signup attempt');
         // Don't throw here, let the actual signup attempt handle network issues
       }
 
@@ -733,19 +753,7 @@ class SupabaseService {
   }) async {
     try {
       // Connectivity preflight
-      try {
-        final result = await InternetAddress.lookup(_host)
-            .timeout(const Duration(seconds: 3));
-        if (result.isEmpty) {
-          throw const SocketException('DNS lookup returned no results');
-        }
-      } on TimeoutException catch (_) {
-        throw Exception(
-            'Connection timed out while reaching the server. Please check your internet and try again.');
-      } on SocketException catch (e) {
-        throw Exception(
-            'Cannot reach authentication server. Check your internet connection. Details: ${e.message}');
-      }
+      await _checkConnectivity();
 
       Future<AuthResponse> _doSignin() => client.auth
           .signInWithPassword(email: email, password: password)
@@ -855,16 +863,8 @@ class SupabaseService {
 
       // Lightweight connectivity preflight (similar to signIn)
       try {
-        final result = await InternetAddress.lookup(_host)
-            .timeout(const Duration(seconds: 3));
-        if (result.isEmpty) {
-          throw const SocketException('DNS lookup returned no results');
-        }
-      } on TimeoutException catch (_) {
-        throw const UserFacingError(
-          'Connection timed out while reaching the server. Please check your internet and try again.',
-        );
-      } on SocketException catch (_) {
+        await _checkConnectivity();
+      } catch (e) {
         throw const UserFacingError(
           "You're offline. Please check your internet connection and try again.",
         );
@@ -1344,15 +1344,24 @@ class SupabaseService {
     }
   }
 
-  // Fetch all daily goals for current user
+  // Fetch daily goals for current user — limited to the last 30 days.
+  // A date filter is intentional: loading ALL history (potentially thousands of rows)
+  // inflates the local in-memory list, causing badge milestone checks and the 3-goals/day
+  // UI cap to read wrong data. 30 days covers the full weekly progress graph and all
+  // active challenge evaluation windows. Older completions are counted from the DB
+  // directly (e.g., in BadgeService._checkGoalsCompletedMilestones).
   Future<List<DailyGoalModel>> fetchDailyGoals() async {
     try {
       if (currentUser == null) return [];
+
+      // Only fetch goals from the last 30 days to keep local state lean
+      final cutoff = DateTime.now().subtract(const Duration(days: 30));
 
       final response = await client
           .from('daily_goals')
           .select()
           .eq('user_id', currentUser!.id)
+          .gte('date', cutoff.toIso8601String())
           .order('date', ascending: false);
 
       final List<DailyGoalModel> goals = [];
@@ -1377,12 +1386,14 @@ class SupabaseService {
         debugPrint('Error processing daily goals response: $e');
       }
 
+      debugPrint('fetchDailyGoals: loaded ${goals.length} goals (last 30 days)');
       return goals;
     } catch (e) {
       debugPrint('Error fetching daily goals: $e');
       return [];
     }
   }
+
 
   // CHALLENGE SYSTEM METHODS
 
@@ -1582,11 +1593,14 @@ class SupabaseService {
         // Get challenge details
         final challengeData = response['challenges'] as Map<String, dynamic>;
 
-        // Add XP to user (only if xp_reward > 0)
-        // FIX: Previously used coin_reward which caused XP inflation
+        // Add XP to user — ONLY for premium challenges (never for basic)
+        // Basic challenges reward users with coins only, never XP.
+        final challengeType = (challengeData['type'] as String?) ?? 'basic';
         final xpReward = (challengeData['xp_reward'] as num?)?.toInt() ?? 0;
-        if (xpReward > 0) {
+        if (xpReward > 0 && challengeType != 'basic') {
           await addXp(xpReward);
+        } else if (challengeType == 'basic') {
+          debugPrint('XP not awarded for basic challenge completion (by design)');
         }
 
         // Add coin reward

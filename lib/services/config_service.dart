@@ -21,7 +21,7 @@ class ConfigService {
   
   // Configuration keys
   static const String _geminiApiKeyKey = 'gemini_api_key';
-  static const String _defaultGeminiApiKey = 'AIzaSyCQEaFf5DAKyLZJ5HlMx5a_C_UYcbazxlo'; // Updated API key
+  static const String _defaultGeminiApiKey = 'AIzaSyAPI_9l7u49lXrC7tnxmD0lUSKl4VMr5_w'; // Updated API key
   // Flutterwave config (public values only; secrets must live on server)
   static const String _flwPublicKeyKey = 'flutterwave_public_key';
   static const String _flwIsTestModeKey = 'flutterwave_is_test_mode';
@@ -108,6 +108,8 @@ class ConfigService {
   
   /// Reset the Gemini API key to the default value
   Future<void> resetGeminiApiKey() async {
+    // Ensure initialized BEFORE calling setGeminiApiKey to prevent null _prefs crash
+    if (!_isInitialized) await initialize();
     await setGeminiApiKey(_defaultGeminiApiKey);
   }
   

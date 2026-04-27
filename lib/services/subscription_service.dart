@@ -36,7 +36,7 @@ class SubscriptionService {
           .select('*, subscription_plans(*)')
           .eq('user_id', userId)
           .eq('is_active', true)
-          .single();
+          .maybeSingle(); // Changed from .single() to .maybeSingle()
 
       return response;
     } catch (e) {

@@ -43,3 +43,21 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Vercel
+.vercel
+.vercel_build_output/
+
+# Environment variables (if you add them later)
+.env
+.env.local
+.env.production
+
+# Windows installer output and redistributables
+installer_output/
+redist/
+vc_redist*.exe
+nuget.exe
+*.zip
+*.exe
+!windows/runner/*.exe

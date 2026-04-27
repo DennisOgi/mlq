@@ -19,11 +19,22 @@ class CacheService {
   
   /// Initialize the cache service
   Future<void> initialize() async {
-    // Create cache directories if they don't exist
+    if (kIsWeb) {
+      debugPrint('[Cache] Web platform - using browser storage (SharedPreferences)');
+      // Web uses SharedPreferences only, no file system
+      return;
+    }
+    
+    // Mobile/Desktop: Create cache directories
     await _createCacheDirectories();
     
-    // Clean expired cache entries
-    await cleanExpiredCache();
+    // Clean expired cache entries (Deferred to avoid blocking startup)
+    // Run after 15 seconds when the app is likely idle
+    Future.delayed(const Duration(seconds: 15), () {
+      cleanExpiredCache().catchError((e) {
+        debugPrint('Deferred cache cleanup failed: $e');
+      });
+    });
   }
   
   /// Create necessary cache directories
@@ -65,6 +76,19 @@ class CacheService {
     Duration expiration = mediumCache,
   }) async {
     try {
+      if (kIsWeb) {
+        // Web: Use SharedPreferences
+        final prefs = await SharedPreferences.getInstance();
+        final metadata = {
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+          'expiration': expiration.inMilliseconds,
+          'data': data,
+        };
+        await prefs.setString('cache_$key', jsonEncode(metadata));
+        return true;
+      }
+      
+      // Mobile/Desktop: Use file system
       final cacheDir = await cachePath;
       final file = File('$cacheDir/data/$key.json');
       
@@ -87,6 +111,28 @@ class CacheService {
   /// Retrieve cached JSON data by key
   Future<Map<String, dynamic>?> getCachedData(String key) async {
     try {
+      if (kIsWeb) {
+        // Web: Use SharedPreferences
+        final prefs = await SharedPreferences.getInstance();
+        final jsonString = prefs.getString('cache_$key');
+        
+        if (jsonString == null) return null;
+        
+        final metadata = jsonDecode(jsonString) as Map<String, dynamic>;
+        final timestamp = metadata['timestamp'] as int;
+        final expiration = metadata['expiration'] as int;
+        final now = DateTime.now().millisecondsSinceEpoch;
+        
+        if (now - timestamp > expiration) {
+          // Cache has expired, delete it
+          await prefs.remove('cache_$key');
+          return null;
+        }
+        
+        return metadata['data'] as Map<String, dynamic>;
+      }
+      
+      // Mobile/Desktop: Use file system
       final cacheDir = await cachePath;
       final file = File('$cacheDir/data/$key.json');
       
@@ -239,6 +285,20 @@ class CacheService {
   /// Clear all cached data
   Future<void> clearAllCache() async {
     try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      if (kIsWeb) {
+        // Web: Clear all cache_ prefixed keys
+        final keys = prefs.getKeys();
+        for (var key in keys) {
+          if (key.startsWith('cache_') || key.startsWith('img_cache_')) {
+            await prefs.remove(key);
+          }
+        }
+        return;
+      }
+      
+      // Mobile/Desktop: Clear file system cache
       final cacheDir = await cachePath;
       final directory = Directory(cacheDir);
       
@@ -248,7 +308,6 @@ class CacheService {
       }
       
       // Clear cache-related shared preferences
-      final prefs = await SharedPreferences.getInstance();
       final keys = prefs.getKeys();
       for (var key in keys) {
         if (key.startsWith('img_cache_')) {

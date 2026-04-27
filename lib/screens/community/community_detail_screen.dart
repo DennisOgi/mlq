@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
@@ -39,6 +40,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen>
   bool _isSending = false;
   bool _isUploadingImage = false;
   RealtimeChannel? _messageChannel;
+  bool _isRealtimeConnected = true;
   
   // Community data (mutable for image updates)
   late CommunityModel _community;
@@ -124,7 +126,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen>
           .order('role', ascending: true);
       debugPrint('Loaded ${(response as List).length} members');
       setState(() {
-        _members = List<Map<String, dynamic>>.from(response as List);
+        _members = List<Map<String, dynamic>>.from(response);
         _isLoadingMembers = false;
       });
     } catch (e) {
@@ -185,6 +187,10 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen>
   }
 
   void _subscribeToMessages() {
+    debugPrint('[Chat] Subscribing to messages for community ${_community.id}');
+    
+    _messageChannel?.unsubscribe(); // Clean up existing subscription
+    
     _messageChannel = _supabase
         .channel('community_messages_${_community.id}')
         .onPostgresChanges(
@@ -197,21 +203,62 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen>
             value: _community.id,
           ),
           callback: (payload) async {
-            // Fetch the new message with profile info
-            final newMessage = await _supabase
-                .from('community_messages')
-                .select('*, profiles(id, name, avatar_url)')
-                .eq('id', payload.newRecord['id'])
-                .single();
-            if (mounted) {
-              setState(() {
-                _messages.add(newMessage);
-              });
-              _scrollToBottom();
+            debugPrint('[Chat] New message received: ${payload.newRecord['id']}');
+            try {
+              // Fetch the new message with profile info
+              final newMessage = await _supabase
+                  .from('community_messages')
+                  .select('*, profiles(id, name, avatar_url)')
+                  .eq('id', payload.newRecord['id'])
+                  .single();
+              
+              if (mounted) {
+                setState(() {
+                  // Check for duplicates before adding (including temp messages)
+                  final exists = _messages.any((m) => 
+                    m['id'] == newMessage['id'] || 
+                    (m['_temp'] == true && m['content'] == newMessage['content'])
+                  );
+                  if (!exists) {
+                    _messages.add(newMessage);
+                    debugPrint('[Chat] Message added. Total: ${_messages.length}');
+                  } else {
+                    // Replace temp message with real one
+                    final tempIndex = _messages.indexWhere((m) => 
+                      m['_temp'] == true && m['content'] == newMessage['content']
+                    );
+                    if (tempIndex >= 0) {
+                      _messages[tempIndex] = newMessage;
+                      debugPrint('[Chat] Replaced temp message with real one');
+                    }
+                  }
+                });
+                
+                // Only scroll if user is near bottom
+                _scrollToBottomIfNearBottom();
+              }
+            } catch (e) {
+              debugPrint('[Chat] Error fetching new message: $e');
             }
           },
         )
-        .subscribe();
+        .subscribe((status, error) {
+          debugPrint('[Chat] Subscription status: $status');
+          
+          if (mounted) {
+            setState(() {
+              _isRealtimeConnected = status == RealtimeSubscribeStatus.subscribed;
+            });
+          }
+          
+          if (error != null) {
+            debugPrint('[Chat] Subscription error: $error');
+            // Retry subscription after delay
+            Future.delayed(const Duration(seconds: 5), () {
+              if (mounted) _subscribeToMessages();
+            });
+          }
+        });
   }
 
   void _scrollToBottom() {
@@ -225,42 +272,120 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen>
       }
     });
   }
+  
+  void _scrollToBottomIfNearBottom() {
+    if (!_scrollController.hasClients) return;
+    
+    final position = _scrollController.position;
+    final isNearBottom = position.pixels >= position.maxScrollExtent - 100;
+    
+    if (isNearBottom) {
+      _scrollToBottom();
+    }
+  }
 
   Future<void> _sendMessage() async {
     final content = _messageController.text.trim();
-    debugPrint('Attempting to send message: "$content"');
+    debugPrint('[Chat] Attempting to send message: "$content"');
     if (content.isEmpty || _isSending) {
-      debugPrint('Message empty or already sending, aborting');
+      debugPrint('[Chat] Message empty or already sending, aborting');
       return;
     }
 
-    setState(() => _isSending = true);
+    final tempId = 'temp_${DateTime.now().millisecondsSinceEpoch}';
+    final userId = _supabase.auth.currentUser?.id;
+    final userProvider = Provider.of<UserProvider>(context, listen: false);
+    
+    // Optimistic UI update - show message immediately
+    final optimisticMessage = {
+      'id': tempId,
+      'community_id': _community.id,
+      'user_id': userId,
+      'content': content,
+      'created_at': DateTime.now().toIso8601String(),
+      'profiles': {
+        'id': userId,
+        'name': userProvider.user?.name ?? 'You',
+        'avatar_url': userProvider.user?.avatarUrl,
+      },
+      '_sending': true, // Mark as sending
+      '_temp': true, // Mark as temporary
+    };
+
+    setState(() {
+      _messages.add(optimisticMessage);
+      _isSending = true;
+    });
+    _messageController.clear();
+    _scrollToBottom();
+
     try {
-      final userId = _supabase.auth.currentUser?.id;
-      debugPrint('Sending message to community ${_community.id} from user $userId');
+      debugPrint('[Chat] Sending message to community ${_community.id} from user $userId');
       
-      await _supabase.from('community_messages').insert({
-        'community_id': _community.id,
-        'user_id': userId,
-        'content': content,
-      });
-      debugPrint('Message sent successfully!');
-      _messageController.clear();
-      // Reload messages after sending
-      await _loadMessages();
-    } catch (e) {
-      debugPrint('Error sending message: $e');
+      // Send to server
+      final response = await _supabase
+          .from('community_messages')
+          .insert({
+            'community_id': _community.id,
+            'user_id': userId,
+            'content': content,
+          })
+          .select('*, profiles(id, name, avatar_url)')
+          .single();
+
+      debugPrint('[Chat] Message sent successfully! ID: ${response['id']}');
+      
+      // Replace optimistic message with real one
       if (mounted) {
+        setState(() {
+          final index = _messages.indexWhere((m) => m['id'] == tempId);
+          if (index >= 0) {
+            _messages[index] = response;
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('[Chat] Error sending message: $e');
+      
+      // Mark message as failed
+      if (mounted) {
+        setState(() {
+          final index = _messages.indexWhere((m) => m['id'] == tempId);
+          if (index >= 0) {
+            _messages[index]['_failed'] = true;
+            _messages[index]['_sending'] = false;
+          }
+        });
+        
+        // Show retry option
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to send message: $e'),
+            content: const Text('Failed to send message'),
             backgroundColor: Colors.red,
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: () => _retryMessage(tempId, content),
+            ),
+            duration: const Duration(seconds: 5),
           ),
         );
       }
     } finally {
       if (mounted) setState(() => _isSending = false);
     }
+  }
+
+  Future<void> _retryMessage(String tempId, String content) async {
+    debugPrint('[Chat] Retrying message: $tempId');
+    // Remove failed message
+    setState(() {
+      _messages.removeWhere((m) => m['id'] == tempId);
+    });
+    
+    // Resend
+    _messageController.text = content;
+    await _sendMessage();
   }
 
   Future<void> _pickAndUploadImage() async {
@@ -278,19 +403,31 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen>
       
       setState(() => _isUploadingImage = true);
       
-      final file = File(image.path);
-      final fileExt = image.path.split('.').last;
+      // Get file extension from name (works on all platforms)
+      final fileExt = image.name.split('.').last;
       final fileName = '${_community.id}_${DateTime.now().millisecondsSinceEpoch}.$fileExt';
       final filePath = 'community_images/$fileName';
       
-      // Upload to Supabase Storage
-      await _supabase.storage.from('organization-assets').upload(
-        filePath,
-        file,
-        fileOptions: const FileOptions(cacheControl: '3600', upsert: true),
-      );
+      // On web, use bytes; on mobile, use File
+      if (kIsWeb) {
+        // Web: Read as bytes
+        final bytes = await image.readAsBytes();
+        await _supabase.storage.from('organization-assets').uploadBinary(
+          filePath,
+          bytes,
+          fileOptions: const FileOptions(cacheControl: '3600', upsert: true),
+        );
+      } else {
+        // Mobile/Desktop: Use File
+        final file = File(image.path);
+        await _supabase.storage.from('organization-assets').upload(
+          filePath,
+          file,
+          fileOptions: const FileOptions(cacheControl: '3600', upsert: true),
+        );
+      }
       
-      // Get public URL
+      // Get public URL (same for all platforms)
       final imageUrl = _supabase.storage.from('organization-assets').getPublicUrl(filePath);
       
       // Update community record
@@ -1314,6 +1451,36 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen>
 
     return Column(
       children: [
+        // Connection status banner
+        if (!_isRealtimeConnected)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            color: Colors.orange.shade100,
+            child: Row(
+              children: [
+                Icon(Icons.cloud_off, size: 18, color: Colors.orange.shade700),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Reconnecting to chat...',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.orange.shade800,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.orange.shade700,
+                  ),
+                ),
+              ],
+            ),
+          ),
         Expanded(
           child: _messages.isEmpty
               ? Center(
@@ -1439,6 +1606,8 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen>
     final content = message['content'] as String? ?? '';
     final createdAt = DateTime.tryParse(message['created_at'] ?? '') ?? DateTime.now();
     final timeStr = '${createdAt.hour.toString().padLeft(2, '0')}:${createdAt.minute.toString().padLeft(2, '0')}';
+    final isSending = message['_sending'] == true;
+    final isFailed = message['_failed'] == true;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -1538,11 +1707,27 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen>
                       ),
                       if (isMe) ...[
                         const SizedBox(width: 4),
-                        Icon(
-                          Icons.done_all,
-                          size: 14,
-                          color: Colors.white.withOpacity(0.7),
-                        ),
+                        if (isSending)
+                          SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.5,
+                              color: Colors.white.withOpacity(0.7),
+                            ),
+                          )
+                        else if (isFailed)
+                          Icon(
+                            Icons.error_outline,
+                            size: 14,
+                            color: Colors.red.shade300,
+                          )
+                        else
+                          Icon(
+                            Icons.done_all,
+                            size: 14,
+                            color: Colors.white.withOpacity(0.7),
+                          ),
                       ],
                     ],
                   ),
@@ -2239,13 +2424,21 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Member removed'),
-            backgroundColor: Colors.orange,
+            content: Text('Member removed successfully'),
+            backgroundColor: Colors.green,
           ),
         );
       }
     } catch (e) {
       debugPrint('Error removing member: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to remove member: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -2267,6 +2460,14 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen>
       }
     } catch (e) {
       debugPrint('Error promoting member: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to promote member: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 }

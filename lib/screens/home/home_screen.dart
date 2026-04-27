@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
 import '../../services/badge_service.dart' as badge_service;
 
 import '../onboarding/goal_onboarding_screen.dart';
@@ -29,6 +30,7 @@ import '../../services/subscription_service.dart';
 import '../../services/challenge_evaluator.dart';
 import '../../widgets/goal_completion_dialog.dart';
 import '../goals/goal_history_screen.dart';
+import '../wallet/wallet_dashboard_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -85,15 +87,7 @@ class _HomeScreenState extends State<HomeScreen>
       _listenForChallengeCompletions();
       _listenForExpiredGoals();
 
-      // Show feature announcements for new features (only once per feature)
-      _showFeatureAnnouncements();
     });
-  }
-
-  Future<void> _showFeatureAnnouncements() async {
-    if (!mounted) return;
-    // Show Communities feature announcement (shows only once)
-    await FeatureAnnouncements.showCommunitiesAnnouncement(context);
   }
 
   @override
@@ -502,54 +496,30 @@ class _HomeScreenState extends State<HomeScreen>
         // Main scaffold with app bar and content
         Scaffold(
           appBar: AppBar(
-            backgroundColor: Colors.transparent,
+            backgroundColor: AppColors.primary,
             elevation: 0,
             toolbarHeight: 72,
             centerTitle: true,
-            flexibleSpace: Container(
-              decoration: BoxDecoration(
-                color: AppColors.primary,
-                border: const Border(
-                  bottom: BorderSide(color: Color(0xFFFFD700), width: 2),
-                ),
-                borderRadius: const BorderRadius.only(
-                  bottomLeft: Radius.circular(24),
-                  bottomRight: Radius.circular(24),
-                ),
-              ),
-            ),
-            shape: const RoundedRectangleBorder(
-              borderRadius: BorderRadius.only(
-                bottomLeft: Radius.circular(24),
-                bottomRight: Radius.circular(24),
-              ),
-            ),
-            title: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(24),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    height: 36,
-                    child: Image.asset(
-                      'assets/images/questor 9.png',
-                      fit: BoxFit.contain,
-                    ),
+            title: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  height: 36,
+                  child: Image.asset(
+                    'assets/images/questor 9.png',
+                    fit: BoxFit.contain,
                   ),
-                  const SizedBox(width: 6),
-                  Text(
-                    'My Leadership Quest',
-                    style: AppTextStyles.heading3.copyWith(
-                      color: AppColors.primary,
-                      fontWeight: FontWeight.bold,
-                    ),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  'My Leadership Quest',
+                  style: AppTextStyles.heading3.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.5,
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
             actions: const [],
           ),
@@ -658,8 +628,6 @@ class _HomeScreenState extends State<HomeScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(height: 25),
-          // Maintenance notices banner
-          const MaintenanceBanner(),
           // Trial countdown banner (shows only in last 3 days)
           FutureBuilder<Map<String, dynamic>>(
             future: SubscriptionService().getTrialStatus(user?.id ?? ''),
@@ -681,12 +649,8 @@ class _HomeScreenState extends State<HomeScreen>
             onTap: () {
               Navigator.pushNamed(context, '/profile');
             },
-            child: Card(
-              elevation: 12,
-              shadowColor: ChristmasBanner.shouldShow
-                  ? const Color(0xFF1E5631).withOpacity(0.4)
-                  : AppColors.primary.withOpacity(0.3),
-              shape: RoundedRectangleBorder(
+            child: Container(
+              decoration: NeumorphicStyles.large.copyWith(
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Stack(
@@ -927,11 +891,8 @@ class _HomeScreenState extends State<HomeScreen>
           const SizedBox(height: 24),
 
           // Main goals section with tabs
-          Card(
-            elevation: 6,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-            ),
+          Container(
+            decoration: NeumorphicStyles.large,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -1041,11 +1002,8 @@ class _HomeScreenState extends State<HomeScreen>
           const SizedBox(height: 24),
 
           // Weekly progress graph card
-          Card(
-            elevation: 6,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-            ),
+          Container(
+            decoration: NeumorphicStyles.large,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -1079,16 +1037,21 @@ class _HomeScreenState extends State<HomeScreen>
 
           const SizedBox(height: 24),
 
+          // ── LeadWallet card ────────────────────────────────────
+          _buildWalletCard(user)
+              .animate()
+              .fadeIn(duration: 500.ms, delay: 450.ms)
+              .slideY(begin: 0.15, end: 0, curve: Curves.easeOutCubic),
+
+          const SizedBox(height: 24),
+
           // Gratitude slider
           const GratitudeSlider(),
           const SizedBox(height: 24),
 
           // Mini-courses section card
-          Card(
-            elevation: 6,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-            ),
+          Container(
+            decoration: NeumorphicStyles.large,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -3034,4 +2997,140 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   // Removed: _buildDebugValidationPanel (debug-only UI)
+
+  // ── LeadWallet Card UI ───────────────────────────────────────
+  Widget _buildWalletCard(UserModel? user) {
+    if (user == null) return const SizedBox.shrink();
+
+    // Use current wallet balance or default to 0 if not fetched yet
+    final balanceStr = NumberFormat('#,##0.00', 'en_NG').format(user.walletBalance);
+
+    return GestureDetector(
+      onTap: () => Navigator.pushNamed(context, '/wallet'),
+      child: Container(
+        decoration: NeumorphicStyles.large.copyWith(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Stack(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(0xFF0D0820),
+                    Color(0xFF1A1A2E), // very dark purple/blue
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: const Color(0xFFFFD700).withOpacity(0.3),
+                  width: 1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFFFFD700).withOpacity(0.15),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  // Wallet Icon
+                  Container(
+                    width: 50,
+                    height: 50,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFFFFD700), Color(0xFFFF9500)],
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFFFD700).withOpacity(0.4),
+                          blurRadius: 12,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.account_balance_wallet_rounded,
+                      color: Colors.white,
+                      size: 26,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  
+                  // Balance
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'LeadWallet Balance',
+                          style: TextStyle(
+                            fontFamily: 'Nunito',
+                            color: Colors.white.withOpacity(0.7),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        ShaderMask(
+                          shaderCallback: (bounds) => const LinearGradient(
+                            colors: [Color(0xFFFFFFFF), Color(0xFFFFD700)],
+                          ).createShader(bounds),
+                          child: Text(
+                            '₦$balanceStr',
+                            style: const TextStyle(
+                              fontFamily: 'Nunito',
+                              fontSize: 24,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.white,
+                              letterSpacing: -0.5,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  
+                  // Status/CTA
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          user.isWalletActive ? 'Open' : 'Activate',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(
+                          Icons.arrow_forward_ios_rounded,
+                          color: Colors.white,
+                          size: 10,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

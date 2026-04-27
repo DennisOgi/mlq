@@ -39,7 +39,7 @@ class FlutterwaveService {
           'email': email,
           'name': name,
           'phone_number': phoneNumber ?? '',
-          'payment_options': 'card,banktransfer,ussd',
+          // Omitting 'payment_options' enables all payment methods available in Flutterwave
           'meta': meta ?? {},
         },
       );

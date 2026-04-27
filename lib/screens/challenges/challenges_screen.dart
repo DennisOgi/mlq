@@ -134,6 +134,7 @@ class _ChallengesScreenState extends State<ChallengesScreen>
     final tabBar = TabBar(
       controller: _tabController,
       isScrollable: true,
+      tabAlignment: TabAlignment.center,
       indicatorColor: Colors.transparent, // Remove the underline/outline border
       dividerColor: Colors.transparent, // Remove the bottom divider/border line
       labelColor: AppColors.secondary, // Active tab gold
@@ -249,12 +250,7 @@ class _ChallengesScreenState extends State<ChallengesScreen>
           ],
         ),
         backgroundColor: AppColors.primary,
-        elevation: 4,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(
-            bottom: Radius.circular(16),
-          ),
-        ),
+        elevation: 0,
         actions: [
           IconButton(
             icon: const Icon(Icons.shopping_bag, color: AppColors.secondary),
@@ -416,107 +412,189 @@ class _ChallengesScreenState extends State<ChallengesScreen>
       );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: challenges.length,
-      itemBuilder: (context, index) {
-        final challenge = challenges[index];
-        final isParticipatingInThisChallenge =
-            challengeProvider.isParticipatingIn(challenge.id);
+    // Desktop optimization: Use grid layout for wider screens
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isDesktop = constraints.maxWidth > 800;
+        
+        if (isDesktop) {
+          // Grid layout for desktop
+          return GridView.builder(
+            padding: const EdgeInsets.all(24),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: constraints.maxWidth > 1200 ? 3 : 2,
+              crossAxisSpacing: 20,
+              mainAxisSpacing: 20,
+              childAspectRatio: 1.1,
+            ),
+            itemCount: challenges.length,
+            itemBuilder: (context, index) {
+              final challenge = challenges[index];
+              final isParticipatingInThisChallenge =
+                  challengeProvider.isParticipatingIn(challenge.id);
 
-        // For joined premium challenges, show richer premium layout with actions
-        if (isParticipatingInThisChallenge && challenge.isPremium) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              PremiumChallengeCard(
-                challenge: challenge,
-                isUnlocked: true,
-                showSponsorRegistration: false,
-                onTap: () => _openChallengeDetail(context, challenge),
-              ),
-              if (challengeProvider.isCompleted(challenge.id))
-                Padding(
-                  padding:
-                      const EdgeInsets.only(top: 8.0, left: 16.0, right: 16.0),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: AppColors.success.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                            color: AppColors.success.withOpacity(0.4)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.check_circle,
-                              size: 16, color: AppColors.success),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Completed',
-                            style: AppTextStyles.caption.copyWith(
-                              color: AppColors.success,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
+              if (isParticipatingInThisChallenge && challenge.isPremium) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: PremiumChallengeCard(
+                        challenge: challenge,
+                        isUnlocked: true,
+                        showSponsorRegistration: false,
+                        onTap: () => _openChallengeDetail(context, challenge),
                       ),
                     ),
-                  ),
-                ),
-              const SizedBox(height: 8),
-              // View details button
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                child: QuestButton(
-                  text: 'View Details',
-                  type: QuestButtonType.primary,
-                  isFullWidth: true,
-                  onPressed: () => _openChallengeDetail(context, challenge),
-                ),
-              ),
-              const SizedBox(height: 8),
-              // Leave challenge button
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                child: QuestButton(
-                  text: 'Leave Challenge',
-                  type: QuestButtonType.outline,
-                  isFullWidth: true,
-                  onPressed: () async {
-                    challengeProvider.leaveChallenge(challenge.id);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'You left the ${challenge.title} challenge',
-                          style:
-                              AppTextStyles.body.copyWith(color: Colors.white),
+                    if (challengeProvider.isCompleted(challenge.id))
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: AppColors.success.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                                color: AppColors.success.withValues(alpha: 0.4)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.check_circle,
+                                  size: 16, color: AppColors.success),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Completed',
+                                style: AppTextStyles.caption.copyWith(
+                                  color: AppColors.success,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                        backgroundColor: AppColors.secondary,
                       ),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
-          ).animate().fadeIn(
-              duration: Duration(milliseconds: 300),
-              delay: Duration(milliseconds: 50 * index));
+                  ],
+                ).animate().fadeIn(
+                    duration: const Duration(milliseconds: 300),
+                    delay: Duration(milliseconds: 50 * index));
+              }
+
+              return ChallengeCard(
+                challenge: challenge,
+                isParticipating: isParticipatingInThisChallenge,
+                onTap: () => _openChallengeDetail(context, challenge),
+              ).animate().fadeIn(
+                  duration: const Duration(milliseconds: 300),
+                  delay: Duration(milliseconds: 50 * index));
+            },
+          );
         }
 
-        // Default card for others (basic or not joined)
-        return ChallengeCard(
-          challenge: challenge,
-          isParticipating: isParticipatingInThisChallenge,
-          onTap: () => _openChallengeDetail(context, challenge),
-        ).animate().fadeIn(
-            duration: Duration(milliseconds: 300),
-            delay: Duration(milliseconds: 50 * index));
+        // Mobile: List layout
+        return ListView.builder(
+          padding: const EdgeInsets.all(16),
+          itemCount: challenges.length,
+          itemBuilder: (context, index) {
+            final challenge = challenges[index];
+            final isParticipatingInThisChallenge =
+                challengeProvider.isParticipatingIn(challenge.id);
+
+            // For joined premium challenges, show richer premium layout with actions
+            if (isParticipatingInThisChallenge && challenge.isPremium) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  PremiumChallengeCard(
+                    challenge: challenge,
+                    isUnlocked: true,
+                    showSponsorRegistration: false,
+                    onTap: () => _openChallengeDetail(context, challenge),
+                  ),
+                  if (challengeProvider.isCompleted(challenge.id))
+                    Padding(
+                      padding: const EdgeInsets.only(
+                          top: 8.0, left: 16.0, right: 16.0),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: AppColors.success.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                                color: AppColors.success.withValues(alpha: 0.4)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.check_circle,
+                                  size: 16, color: AppColors.success),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Completed',
+                                style: AppTextStyles.caption.copyWith(
+                                  color: AppColors.success,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                  // View details button
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    child: QuestButton(
+                      text: 'View Details',
+                      type: QuestButtonType.primary,
+                      isFullWidth: true,
+                      onPressed: () => _openChallengeDetail(context, challenge),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  // Leave challenge button
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    child: QuestButton(
+                      text: 'Leave Challenge',
+                      type: QuestButtonType.outline,
+                      isFullWidth: true,
+                      onPressed: () async {
+                        challengeProvider.leaveChallenge(challenge.id);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'You left the ${challenge.title} challenge',
+                              style: AppTextStyles.body
+                                  .copyWith(color: Colors.white),
+                            ),
+                            backgroundColor: AppColors.secondary,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+              ).animate().fadeIn(
+                  duration: const Duration(milliseconds: 300),
+                  delay: Duration(milliseconds: 50 * index));
+            }
+
+            // Default card for others (basic or not joined)
+            return ChallengeCard(
+              challenge: challenge,
+              isParticipating: isParticipatingInThisChallenge,
+              onTap: () => _openChallengeDetail(context, challenge),
+            ).animate().fadeIn(
+                duration: const Duration(milliseconds: 300),
+                delay: Duration(milliseconds: 50 * index));
+          },
+        );
       },
     );
   }

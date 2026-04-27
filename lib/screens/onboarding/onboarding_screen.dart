@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:my_leadership_quest/models/main_goal_model.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import 'dart:math' as math;
 import 'dart:io';
-import 'package:flutterwave_standard/flutterwave.dart';
+// import 'package:flutterwave_standard/flutterwave.dart'; // Temporarily disabled for Windows build
 import 'package:uuid/uuid.dart';
 
 import '../../constants/app_constants.dart';
@@ -108,6 +109,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   @override
   void initState() {
     super.initState();
+    if (kDebugMode) debugPrint('[OnboardingScreen] Initializing onboarding screen');
     // Load schools after first frame to ensure context is available
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
@@ -567,6 +569,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (kDebugMode) debugPrint('[OnboardingScreen] Building onboarding screen, current page: $_currentPage');
     // If showing payment screen, render that instead of the normal flow
     if (_showingPaymentScreen) {
       return WillPopScope(
@@ -601,11 +604,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         body: Stack(
           children: [
             // Page content (full screen, no SafeArea)
-            PageView(
+            PageView.builder(
               controller: _pageController,
-              physics: _showingPaymentScreen
-                  ? const NeverScrollableScrollPhysics()
-                  : null,
               onPageChanged: (page) {
                 FocusScope.of(context).unfocus();
                 setState(() {
@@ -615,126 +615,133 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 Provider.of<OnboardingProvider>(context, listen: false)
                     .setCurrentPage(page);
               },
-              children: [
-                WelcomePage(onNext: _nextPage), // 0
-                GoalIntroPage(onNext: _nextPage, onBack: _previousPage), // 1
-                MainDailyGoalsPage(
-                    onNext: _nextPage, onBack: _previousPage), // 2
-                MeetQuestorPage(onNext: _nextPage, onBack: _previousPage), // 3
-                PersonalInfoPage(
-                  nameController: _nameController,
-                  emailController: _emailController,
-                  passwordController: _passwordController,
-                  confirmPasswordController: _confirmPasswordController,
-                  parentEmailController: _parentEmailController,
-                  dobController: _dobController,
-                  obscurePassword: _obscurePassword,
-                  obscureConfirmPassword: _obscureConfirmPassword,
-                  useParentEmail: _useParentEmail,
-                  agreedToTerms: _agreedToTerms,
-                  selectedDate: _selectedDate,
-                  onTogglePasswordVisibility: () {
-                    setState(() => _obscurePassword = !_obscurePassword);
-                  },
-                  onToggleConfirmPasswordVisibility: () {
-                    setState(() =>
-                        _obscureConfirmPassword = !_obscureConfirmPassword);
-                  },
-                  onToggleParentEmail: (value) {
-                    setState(() => _useParentEmail = value);
-                  },
-                  onToggleTerms: (value) {
-                    setState(() => _agreedToTerms = value);
-                  },
-                  onPickDate: () async {
-                    final DateTime? picked = await showDatePicker(
-                      context: context,
-                      initialDate: _selectedDate,
-                      firstDate: DateTime(1990),
-                      lastDate: DateTime.now(),
-                      builder: (context, child) {
-                        return Theme(
-                          data: Theme.of(context).copyWith(
-                            colorScheme: const ColorScheme.light(
-                              primary: AppColors.primary,
-                              onPrimary: Colors.white,
-                              onSurface: AppColors.textPrimary,
-                            ),
-                          ),
-                          child: child!,
-                        );
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: 8,
+              itemBuilder: (context, index) {
+                switch (index) {
+                  case 0:
+                    return WelcomePage(onNext: _nextPage);
+                  case 1:
+                    return GoalIntroPage(onNext: _nextPage, onBack: _previousPage);
+                  case 2:
+                    return MainDailyGoalsPage(onNext: _nextPage, onBack: _previousPage);
+                  case 3:
+                    return MeetQuestorPage(onNext: _nextPage, onBack: _previousPage);
+                  case 4:
+                    return PersonalInfoPage(
+                      nameController: _nameController,
+                      emailController: _emailController,
+                      passwordController: _passwordController,
+                      confirmPasswordController: _confirmPasswordController,
+                      parentEmailController: _parentEmailController,
+                      dobController: _dobController,
+                      obscurePassword: _obscurePassword,
+                      obscureConfirmPassword: _obscureConfirmPassword,
+                      useParentEmail: _useParentEmail,
+                      agreedToTerms: _agreedToTerms,
+                      selectedDate: _selectedDate,
+                      onTogglePasswordVisibility: () {
+                        setState(() => _obscurePassword = !_obscurePassword);
                       },
+                      onToggleConfirmPasswordVisibility: () {
+                        setState(() =>
+                            _obscureConfirmPassword = !_obscureConfirmPassword);
+                      },
+                      onToggleParentEmail: (value) {
+                        setState(() => _useParentEmail = value);
+                      },
+                      onToggleTerms: (value) {
+                        setState(() => _agreedToTerms = value);
+                      },
+                      onPickDate: () async {
+                        final DateTime? picked = await showDatePicker(
+                          context: context,
+                          initialDate: _selectedDate,
+                          firstDate: DateTime(1990),
+                          lastDate: DateTime.now(),
+                          builder: (context, child) {
+                            return Theme(
+                              data: Theme.of(context).copyWith(
+                                colorScheme: const ColorScheme.light(
+                                  primary: AppColors.primary,
+                                  onPrimary: Colors.white,
+                                  onSurface: AppColors.textPrimary,
+                                ),
+                              ),
+                              child: child!,
+                            );
+                          },
+                        );
+                        if (picked != null && picked != _selectedDate) {
+                          setState(() {
+                            _selectedDate = picked;
+                            _dobController.text =
+                                '${picked.day.toString().padLeft(2, '0')}/${picked.month.toString().padLeft(2, '0')}/${picked.year}';
+                          });
+                        }
+                      },
+                      onNext: () {
+                        if (_agreedToTerms) {
+                          _nextPage();
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Please agree to the Terms & Conditions',
+                                style: AppTextStyles.body
+                                    .copyWith(color: Colors.white),
+                              ),
+                              backgroundColor: AppColors.error,
+                            ),
+                          );
+                        }
+                      },
+                      onBack: _previousPage,
                     );
-                    if (picked != null && picked != _selectedDate) {
-                      setState(() {
-                        _selectedDate = picked;
-                        _dobController.text =
-                            '${picked.day.toString().padLeft(2, '0')}/${picked.month.toString().padLeft(2, '0')}/${picked.year}';
-                      });
-                    }
-                  },
-                  onNext: () {
-                    if (_agreedToTerms) {
-                      _nextPage();
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'Please agree to the Terms & Conditions',
-                            style: AppTextStyles.body
-                                .copyWith(color: Colors.white),
+                  case 5:
+                    return InterestsPage(
+                      availableInterests: _availableInterests,
+                      selectedInterests: _selectedInterests,
+                      onToggleInterest: (interest) {
+                        setState(() {
+                          if (_selectedInterests.contains(interest)) {
+                            _selectedInterests.remove(interest);
+                          } else {
+                            _selectedInterests.add(interest);
+                          }
+                        });
+                      },
+                      onNext: _nextPage,
+                      onBack: _previousPage,
+                    );
+                  case 6:
+                    return PermissionsPage(
+                      onAllowNotifications: () async {
+                        try {
+                          await PushNotificationService.instance.initialize();
+                        } catch (e) {}
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Notifications enabled!'),
+                            backgroundColor: AppColors.success,
                           ),
-                          backgroundColor: AppColors.error,
-                        ),
-                      );
-                    }
-                  },
-                  onBack: _previousPage,
-                ), // 4 (Profile)
-                InterestsPage(
-                  availableInterests: _availableInterests,
-                  selectedInterests: _selectedInterests,
-                  onToggleInterest: (interest) {
-                    setState(() {
-                      if (_selectedInterests.contains(interest)) {
-                        _selectedInterests.remove(interest);
-                      } else {
-                        _selectedInterests.add(interest);
-                      }
-                    });
-                  },
-                  onNext: _nextPage,
-                  onBack: _previousPage,
-                ), // 5 (Interests)
-                PermissionsPage(
-                  onAllowNotifications: () async {
-                    try {
-                      await PushNotificationService.instance.initialize();
-                    } catch (e) {
-                      // best-effort; continue onboarding
-                    }
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'Notifications enabled!',
-                          style:
-                              AppTextStyles.body.copyWith(color: Colors.white),
-                        ),
-                        backgroundColor: AppColors.success,
-                      ),
+                        );
+                        _nextPage();
+                      },
+                      onSkip: _nextPage,
+                      onBack: _previousPage,
                     );
-                    _nextPage();
-                  },
-                  onSkip: _nextPage,
-                  onBack: _previousPage,
-                ), // 6
-                StartQuestPage(
-                  isStartingQuest: _isStartingQuest,
-                  onStartQuest: _completeOnboarding,
-                  onBack: _previousPage,
-                ), // 7 (final)
-              ],
+                  case 7:
+                    return StartQuestPage(
+                      isStartingQuest: _isStartingQuest,
+                      onStartQuest: _completeOnboarding,
+                      onBack: _previousPage,
+                    );
+                  default:
+                    return const SizedBox.shrink();
+                }
+              },
             ),
 
             // Progress indicator overlay (only show when not on welcome page)
