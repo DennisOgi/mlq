@@ -14,6 +14,8 @@ enum AddDailyGoalStatus {
   createdOnline,
   queuedOffline,
   limitReached,
+  unrelated,
+  cloned,
   failed,
 }
 
@@ -26,6 +28,8 @@ class GoalProvider extends ChangeNotifier {
   bool _isInitialized = false;
   bool _initInProgress = false;
   StreamSubscription<AuthState>? _authSub;
+  /// Last human-readable error from daily-goal create (for student UI).
+  String? lastDailyGoalError;
 
   // Stream controller for goal completion events
   final _goalCompletionController = StreamController<MainGoalModel>.broadcast();
@@ -65,27 +69,22 @@ class GoalProvider extends ChangeNotifier {
         // Synchronize any temporary goals first
         await synchronizeTempGoals();
         try {
-          // Load main goals from Supabase
+          // Load main goals from Supabase (trust server, keep only if fetch fails)
           final mainGoals = await _supabaseService.fetchMainGoals();
-          if (mainGoals.isNotEmpty) {
-            _mainGoals = mainGoals;
-            // Save to local storage for future use
-            await _saveMainGoals();
-            debugPrint('Loaded ${mainGoals.length} main goals from Supabase');
-          } else if (_mainGoals.isEmpty) {
-            debugPrint('No main goals found in Supabase');
-          }
+          _mainGoals = mainGoals;
+          await _saveMainGoals();
+          debugPrint('Loaded ${mainGoals.length} main goals from Supabase');
 
-          // Load daily goals from Supabase
+          // Load daily goals from Supabase; preserve unsynced temp_ rows
           final dailyGoals = await _supabaseService.fetchDailyGoals();
-          if (dailyGoals.isNotEmpty) {
-            _dailyGoals = dailyGoals;
-            // Save to local storage for future use
-            await _saveDailyGoals();
-            debugPrint('Loaded ${dailyGoals.length} daily goals from Supabase');
-          } else if (_dailyGoals.isEmpty) {
-            debugPrint('No daily goals found in Supabase');
-          }
+          final unsyncedTemps = _dailyGoals
+              .where((g) => g.id.startsWith('temp_'))
+              .toList();
+          _dailyGoals = [...dailyGoals, ...unsyncedTemps];
+          await _saveDailyGoals();
+          debugPrint(
+              'Loaded ${dailyGoals.length} daily goals from Supabase '
+              '(+${unsyncedTemps.length} unsynced local)');
         } catch (e) {
           debugPrint('Error syncing with Supabase: $e');
           // We already loaded from local storage, so we have fallback data
@@ -132,8 +131,8 @@ class GoalProvider extends ChangeNotifier {
   List<MainGoalModel> get archivedGoals =>
       _mainGoals.where((goal) => goal.isArchived).toList();
 
-  // Get count of active (non-archived) goals
-  int get activeGoalsCount => mainGoals.length;
+  // Count only truly active mains (matches DB create-gate / daily-goal eligibility).
+  int get activeGoalsCount => activeMainGoalsForDailyGoals.length;
 
   // Get completed but not archived goals
   List<MainGoalModel> get completedGoals =>
@@ -208,12 +207,7 @@ class GoalProvider extends ChangeNotifier {
   // Get daily goals for today
   List<DailyGoalModel> get todayGoals {
     final today = DateTime.now();
-    final startOfDay = DateTime(today.year, today.month, today.day);
-    final endOfDay = DateTime(today.year, today.month, today.day, 23, 59, 59);
-
-    return _dailyGoals.where((goal) {
-      return goal.date.isAfter(startOfDay) && goal.date.isBefore(endOfDay);
-    }).toList();
+    return _dailyGoals.where((goal) => _isSameDay(goal.date, today)).toList();
   }
 
   Map<DateTime, List<DailyGoalModel>> get weeklyGoals {
@@ -224,14 +218,7 @@ class GoalProvider extends ChangeNotifier {
     for (int i = 0; i < 7; i++) {
       final date =
           DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day + i);
-      final startOfDay = DateTime(date.year, date.month, date.day);
-      final endOfDay = DateTime(date.year, date.month, date.day, 23, 59, 59);
-
-      final goalsForDay = _dailyGoals.where((goal) {
-        return goal.date.isAfter(startOfDay) && goal.date.isBefore(endOfDay);
-      }).toList();
-
-      result[date] = goalsForDay;
+      result[date] = getDailyGoalsForDate(date);
     }
 
     return result;
@@ -273,31 +260,56 @@ class GoalProvider extends ChangeNotifier {
   }
 
   void _listenToAuthChanges() {
-    _authSub =
-        _supabaseService.client.auth.onAuthStateChange.listen((data) async {
-      switch (data.event) {
-        case AuthChangeEvent.signedOut:
-          // Clear in-memory goals and stop reading previous user's local cache
-          _mainGoals = [];
-          _dailyGoals = [];
-          _isInitialized = false;
-          // Also clear all goals from SharedPreferences to prevent leakage
-          await _clearAllGoalsCache();
-          notifyListeners();
-          break;
-        case AuthChangeEvent.signedIn:
-        case AuthChangeEvent.tokenRefreshed:
-        case AuthChangeEvent.userUpdated:
-          // Clear any existing goals first, then reload for the new/current user
-          _mainGoals = [];
-          _dailyGoals = [];
-          _isInitialized = false;
-          await initGoals();
-          break;
-        default:
-          break;
+    try {
+      // Check if Supabase is initialized before trying to access it
+      // This prevents crashes when providers are created before Supabase.initialize() completes
+      if (!_supabaseService.isAuthenticated && _supabaseService.currentUser == null) {
+        // Supabase not yet initialized - defer auth listener setup
+        debugPrint('GoalProvider: Supabase not ready, deferring auth listener setup');
+        // Schedule retry after a delay to allow Supabase initialization to complete
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (_authSub == null) {
+            _listenToAuthChanges();
+          }
+        });
+        return;
       }
-    });
+
+      _authSub =
+          _supabaseService.client.auth.onAuthStateChange.listen((data) async {
+        switch (data.event) {
+          case AuthChangeEvent.signedOut:
+            // Clear in-memory goals and stop reading previous user's local cache
+            _mainGoals = [];
+            _dailyGoals = [];
+            _isInitialized = false;
+            // Also clear all goals from SharedPreferences to prevent leakage
+            await _clearAllGoalsCache();
+            notifyListeners();
+            break;
+          case AuthChangeEvent.signedIn:
+          case AuthChangeEvent.tokenRefreshed:
+          case AuthChangeEvent.userUpdated:
+            // Clear any existing goals first, then reload for the new/current user
+            _mainGoals = [];
+            _dailyGoals = [];
+            _isInitialized = false;
+            await initGoals();
+            break;
+          default:
+            break;
+        }
+      });
+      debugPrint('GoalProvider: Auth listener setup complete');
+    } catch (e) {
+      // If Supabase.instance throws because it's not initialized yet, retry later
+      debugPrint('GoalProvider: Error setting up auth listener (will retry): $e');
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (_authSub == null) {
+          _listenToAuthChanges();
+        }
+      });
+    }
   }
 
   // Clear all goals cache from SharedPreferences (more aggressive than clearGoals)
@@ -448,7 +460,15 @@ class GoalProvider extends ChangeNotifier {
     if (activeGoalsCount >= 3) {
       debugPrint(
           'Cannot add goal: active goal limit reached (${activeGoalsCount}/3)');
-      return;
+      throw Exception(
+          'You already have 3 active main goals (1 per category). Archive an expired or completed goal first, then create a new one.');
+    }
+
+    final sameCategoryActive = activeMainGoalsForDailyGoals
+        .any((g) => g.category == goal.category);
+    if (sameCategoryActive) {
+      throw Exception(
+          'You already have an active ${goal.categoryName.toLowerCase()} goal. Archive it after it expires or is completed before creating another in that category.');
     }
 
     try {
@@ -666,22 +686,34 @@ class GoalProvider extends ChangeNotifier {
 
   // Add a daily goal
   Future<AddDailyGoalStatus> addDailyGoal(DailyGoalModel goal) async {
-    // Enforce max 3 daily goals per day (local guard)
-    final today = DateTime.now();
-    final sameDayGoals =
-        _dailyGoals.where((g) => _isSameDay(g.date, today)).length;
-    const maxDailyGoals = 3;
-    if (sameDayGoals >= maxDailyGoals) {
+    lastDailyGoalError = null;
+    // Product rule: max 3 daily goals total per calendar day (all main goals).
+    final day = DateTime(goal.date.year, goal.date.month, goal.date.day);
+    final sameDayCount =
+        _dailyGoals.where((g) => _isSameDay(g.date, day)).length;
+    const maxDailyGoalsPerDay = 3;
+    if (sameDayCount >= maxDailyGoalsPerDay) {
       debugPrint(
-          'Daily goal limit reached ($maxDailyGoals). New goal not added.');
+          'Daily goal limit reached for day ($sameDayCount/$maxDailyGoalsPerDay).');
+      lastDailyGoalError =
+          'You can only set 3 daily goals per day. Delete an existing goal to add another.';
       return AddDailyGoalStatus.limitReached;
     }
     try {
       // Save to Supabase first if authenticated
       DailyGoalModel updatedGoal;
       if (_supabaseService.isAuthenticated) {
-        updatedGoal = await _supabaseService.saveDailyGoal(goal);
+        final saved = await _supabaseService.saveDailyGoal(goal);
+        updatedGoal = saved.goal;
         _dailyGoals.add(updatedGoal);
+        // Server awards 0.5 coins on create — sync local balance
+        if (saved.coinsAwarded > 0 && _userProvider != null) {
+          try {
+            _userProvider.updateLocalCoins(saved.coinsAwarded);
+          } catch (e) {
+            debugPrint('Local coin sync after create failed: $e');
+          }
+        }
       } else {
         // Generate a temporary ID for offline mode
         updatedGoal =
@@ -704,12 +736,45 @@ class GoalProvider extends ChangeNotifier {
           : AddDailyGoalStatus.queuedOffline;
     } catch (e) {
       debugPrint('Error adding daily goal: $e');
+      final raw = e.toString();
+      final msg = raw.toLowerCase();
+      final cleaned = raw.replaceFirst(RegExp(r'^Exception:\s*'), '').trim();
+
+      if (msg.contains('daily_goal_cloned') ||
+          (msg.contains('cloned') && msg.contains('goal')) ||
+          msg.contains('different main goal today')) {
+        lastDailyGoalError = cleaned
+            .replaceFirst(RegExp(r'^daily_goal_cloned:\s*'), '')
+            .trim();
+        if (lastDailyGoalError == null || lastDailyGoalError!.isEmpty) {
+          lastDailyGoalError =
+              'You already used that same daily goal under a different main goal today.';
+        }
+        return AddDailyGoalStatus.cloned;
+      }
+      if (msg.contains('daily goal limit') || msg.contains('daily_limit')) {
+        lastDailyGoalError =
+            'You can only set 3 daily goals per day. Delete an existing goal to add another.';
+        return AddDailyGoalStatus.limitReached;
+      }
+      // Server policy rejects — do NOT queue offline (avoids ghost goals / desync).
+      if (msg.contains('main_goal_expired') ||
+          msg.contains('main_goal_archived') ||
+          msg.contains('main_goal_completed') ||
+          msg.contains('main_goal_not_found') ||
+          msg.contains('main_goal_required') ||
+          msg.contains('title_required') ||
+          msg.contains('not authenticated')) {
+        lastDailyGoalError = cleaned.isNotEmpty
+            ? cleaned
+            : 'Cannot add this daily goal right now.';
+        return AddDailyGoalStatus.failed;
+      }
+      // Network / unknown transport errors: queue for later sync.
       try {
-        // Fall back to local storage if Supabase fails
         final tempGoal =
             goal.copyWith(id: 'temp_${DateTime.now().millisecondsSinceEpoch}');
         _dailyGoals.add(tempGoal);
-        // Queue for later creation
         await _offlineService.addPendingAction('create_daily_goal', {
           'goal': tempGoal.toJson(),
         });
@@ -718,6 +783,7 @@ class GoalProvider extends ChangeNotifier {
         return AddDailyGoalStatus.queuedOffline;
       } catch (e2) {
         debugPrint('Fallback add daily goal also failed: $e2');
+        lastDailyGoalError = 'Failed to add daily goal. Please try again.';
         return AddDailyGoalStatus.failed;
       }
     }
@@ -858,9 +924,11 @@ class GoalProvider extends ChangeNotifier {
         return false;
       }
 
-      // OPTIMISTIC UPDATE: Update UI immediately for better UX
+      // OPTIMISTIC UPDATE: Update UI immediately for better UX.
+      // Local-only XP bump (persistToServer: false) — the RPC owns server XP;
+      // persisting here too would double-count main-goal progress.
       _dailyGoals[index] = goal.copyWith(isCompleted: true);
-      _addXpToMainGoal(goal.mainGoalId, goal.xpValue);
+      _addXpToMainGoal(goal.mainGoalId, goal.xpValue, persistToServer: false);
       notifyListeners(); // Show checkmark immediately
 
       // Then verify with server in background
@@ -873,7 +941,10 @@ class GoalProvider extends ChangeNotifier {
         final success = await secureService.completeDailyGoal(goalId);
 
         if (success) {
-          // Server confirmed - persist to cache
+          // Server confirmed. Re-sync main goals from the server so local
+          // `current_xp` reflects the authoritative value the RPC set (single
+          // increment), rather than our optimistic estimate.
+          await _refreshMainGoalsFromServer();
           await _saveDailyGoals();
           await _saveMainGoals();
           debugPrint('Goal completion confirmed by server: $goalId');
@@ -883,19 +954,22 @@ class GoalProvider extends ChangeNotifier {
           } catch (_) {}
           return true;
         } else {
-          // Server rejected - rollback optimistic update
+          // Server rejected - rollback optimistic update (local-only: the
+          // server never received this XP).
           debugPrint(
               'Goal completion rejected by server, rolling back: $goalId');
           _dailyGoals[index] = goal.copyWith(isCompleted: false);
-          _removeXpFromMainGoal(goal.mainGoalId, goal.xpValue);
+          _removeXpFromMainGoal(goal.mainGoalId, goal.xpValue,
+              persistToServer: false);
           notifyListeners();
           return false;
         }
       } catch (e) {
-        // Network error - rollback optimistic update
+        // Network error - rollback optimistic update (local-only).
         debugPrint('Goal completion network error, rolling back: $e');
         _dailyGoals[index] = goal.copyWith(isCompleted: false);
-        _removeXpFromMainGoal(goal.mainGoalId, goal.xpValue);
+        _removeXpFromMainGoal(goal.mainGoalId, goal.xpValue,
+            persistToServer: false);
         notifyListeners();
         return false;
       }
@@ -955,8 +1029,14 @@ class GoalProvider extends ChangeNotifier {
     }
   }
 
-  // Add XP to a main goal
-  void _addXpToMainGoal(String mainGoalId, int xpAmount) {
+  // Add XP to a main goal.
+  //
+  // [persistToServer] must be FALSE for the daily-goal completion flow: the
+  // `complete_goal_secure` RPC is the single source of truth for main-goal XP
+  // and increments `current_xp` server-side. Persisting the optimistic value
+  // here too would double-count progress (goals would fill ~2x too fast).
+  void _addXpToMainGoal(String mainGoalId, int xpAmount,
+      {bool persistToServer = true}) {
     final index = _mainGoals.indexWhere((goal) => goal.id == mainGoalId);
     if (index != -1) {
       final goal = _mainGoals[index];
@@ -984,10 +1064,12 @@ class GoalProvider extends ChangeNotifier {
           'Added XP to main goal ${updatedGoal.title} (${updatedGoal.id}): +$xpAmount → ${updatedGoal.currentXp}/${updatedGoal.totalXpRequired}');
       // Proactively notify so any listeners depending on this list refresh immediately
       notifyListeners();
-      // Persist to server in background to keep remote in sync
-      // Intentionally not awaited by callers of toggleDailyGoalCompletion
-      // ignore: unawaited_futures
-      _persistMainGoalXp(_mainGoals[index]);
+      if (persistToServer) {
+        // Persist to server in background to keep remote in sync
+        // Intentionally not awaited by callers
+        // ignore: unawaited_futures
+        _persistMainGoalXp(_mainGoals[index]);
+      }
     } else {
       debugPrint(
           'Main goal not found for XP update. mainGoalId=$mainGoalId; XP to add=$xpAmount');
@@ -1009,8 +1091,13 @@ class GoalProvider extends ChangeNotifier {
     }
   }
 
-  // Remove XP from a main goal (used for rollback on failed completion)
-  void _removeXpFromMainGoal(String mainGoalId, int xpAmount) {
+  // Remove XP from a main goal.
+  //
+  // Used both for rolling back a failed optimistic completion (local-only —
+  // the server never received the XP) and for the "uncomplete" flow (which
+  // must persist the decrement to the server). [persistToServer] selects which.
+  void _removeXpFromMainGoal(String mainGoalId, int xpAmount,
+      {bool persistToServer = true}) {
     final index = _mainGoals.indexWhere((goal) => goal.id == mainGoalId);
     if (index != -1) {
       final goal = _mainGoals[index];
@@ -1037,19 +1124,19 @@ class GoalProvider extends ChangeNotifier {
 
       _mainGoals[index] = updatedGoal;
       notifyListeners();
-      // Persist to server in background to keep remote in sync
-      // ignore: unawaited_futures
-      _persistMainGoalXp(updatedGoal);
+      if (persistToServer) {
+        // Persist to server in background to keep remote in sync
+        // ignore: unawaited_futures
+        _persistMainGoalXp(updatedGoal);
+      }
     }
   }
 
   // Get daily goals for a specific date
   List<DailyGoalModel> getDailyGoalsForDate(DateTime date) {
-    final startOfDay = DateTime(date.year, date.month, date.day);
-    final endOfDay = DateTime(date.year, date.month, date.day, 23, 59, 59);
-    return _dailyGoals.where((goal) {
-      return goal.date.isAfter(startOfDay) && goal.date.isBefore(endOfDay);
-    }).toList();
+    // Include midnight-dated goals (common for date-only timestamps).
+    // The old isAfter(startOfDay) check undercounted and let users add a 4th goal.
+    return _dailyGoals.where((goal) => _isSameDay(goal.date, date)).toList();
   }
 
   // Get daily goals for a specific main goal
@@ -1103,17 +1190,7 @@ class GoalProvider extends ChangeNotifier {
 
     for (int i = 0; i < maxDaysToCheck; i++) {
       final date = todayOnly.subtract(Duration(days: i));
-      final startOfDay = DateTime(date.year, date.month, date.day);
-      final endOfDay =
-          DateTime(date.year, date.month, date.day, 23, 59, 59, 999);
-
-      // Get all goals for this day (inclusive of start and end)
-      final goalsForDay = _dailyGoals.where((goal) {
-        final goalDate =
-            DateTime(goal.date.year, goal.date.month, goal.date.day);
-        return goalDate.isAtSameMomentAs(startOfDay) ||
-            (goal.date.isAfter(startOfDay) && goal.date.isBefore(endOfDay));
-      }).toList();
+      final goalsForDay = getDailyGoalsForDate(date);
 
       // Check if any goals were completed this day
       final completedGoalsForDay =
@@ -1183,7 +1260,8 @@ class GoalProvider extends ChangeNotifier {
       final tempGoal = tempGoals[i];
       try {
         // Save to Supabase to get a permanent ID
-        final permanentGoal = await _supabaseService.saveDailyGoal(tempGoal);
+        final saved = await _supabaseService.saveDailyGoal(tempGoal);
+        final permanentGoal = saved.goal;
 
         // Replace the temporary goal with the permanent one
         final index = _dailyGoals.indexWhere((goal) => goal.id == tempGoal.id);
@@ -1191,6 +1269,11 @@ class GoalProvider extends ChangeNotifier {
           _dailyGoals[index] = permanentGoal;
           hasChanges = true;
           debugPrint('Synchronized goal: ${tempGoal.id} → ${permanentGoal.id}');
+          if (saved.coinsAwarded > 0 && _userProvider != null) {
+            try {
+              _userProvider.updateLocalCoins(saved.coinsAwarded);
+            } catch (_) {}
+          }
         }
       } catch (e) {
         debugPrint('Error synchronizing goal ${tempGoal.id}: $e');
@@ -1219,14 +1302,29 @@ class GoalProvider extends ChangeNotifier {
         final localGoal = DailyGoalModel.fromJson(goalJson);
         // If already has permanent ID, skip
         if (!localGoal.id.startsWith('temp_')) return;
+        // synchronizeTempGoals may have already created this — skip to avoid
+        // a duplicate server row + extra create-coin award.
+        final stillPendingLocally =
+            _dailyGoals.any((g) => g.id == localGoal.id);
+        if (!stillPendingLocally) {
+          debugPrint(
+              'Skipping queued create_daily_goal ${localGoal.id}: already synced');
+          return;
+        }
         // Create on server
-        final created = await _supabaseService.saveDailyGoal(localGoal);
+        final saved = await _supabaseService.saveDailyGoal(localGoal);
+        final created = saved.goal;
         // Replace local temp goal
         final idx = _dailyGoals.indexWhere((g) => g.id == localGoal.id);
         if (idx != -1) {
           _dailyGoals[idx] = created;
           await _saveDailyGoals();
           notifyListeners();
+        }
+        if (saved.coinsAwarded > 0 && _userProvider != null) {
+          try {
+            _userProvider.updateLocalCoins(saved.coinsAwarded);
+          } catch (_) {}
         }
         break;
       case 'update_daily_goal':

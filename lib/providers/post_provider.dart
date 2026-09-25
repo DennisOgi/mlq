@@ -142,11 +142,17 @@ class PostProvider extends ChangeNotifier {
       
       // 1) Fetch posts with nested comments and likes only (no profile joins)
       // PAGINATION: Fetch posts per page with offset
+      final nowIso = DateTime.now().toUtc().toIso8601String();
       final response = await _supabaseService.client.from('posts').select('''
             id,
             user_id,
             content,
             created_at,
+            post_type,
+            title,
+            is_pinned,
+            priority,
+            expires_at,
             post_comments(
               id,
               user_id,
@@ -154,7 +160,10 @@ class PostProvider extends ChangeNotifier {
               created_at
             ),
             post_likes(user_id)
-          ''').order('created_at', ascending: false)
+          ''')
+          .or('expires_at.is.null,expires_at.gt.$nowIso')
+          .order('is_pinned', ascending: false)
+          .order('created_at', ascending: false)
           .range(offset, offset + _postsPerPage - 1);
 
       final List<dynamic> rows = (response as List<dynamic>);
@@ -254,8 +263,17 @@ class PostProvider extends ChangeNotifier {
           createdAt: DateTime.parse(postData['created_at']),
           likedByUserIds: likedByUserIds,
           comments: comments,
+          postType: PostType.fromString(postData['post_type'] as String?),
+          title: postData['title'] as String?,
+          isPinned: postData['is_pinned'] == true,
+          priority: (postData['priority'] as String?) ?? 'normal',
+          expiresAt: postData['expires_at'] != null
+              ? DateTime.parse(postData['expires_at'] as String)
+              : null,
         );
       }).toList();
+
+      await _attachPollData(newPosts);
 
       // Update pagination state
       if (loadMore) {
@@ -277,24 +295,156 @@ class PostProvider extends ChangeNotifier {
     }
   }
 
-  void _listenToAuthChanges() {
-    // Reset/refresh posts when auth state changes to prevent cross-user leakage
-    _authSub = _supabaseService.client.auth.onAuthStateChange.listen((data) {
-      final event = data.event;
-      switch (event) {
-        case AuthChangeEvent.signedOut:
-          _posts = [];
-          notifyListeners();
-          break;
-        case AuthChangeEvent.signedIn:
-        case AuthChangeEvent.tokenRefreshed:
-        case AuthChangeEvent.userUpdated:
-          maybeRefreshPosts(minAge: const Duration(seconds: 30));
-          break;
-        default:
-          break;
+  Future<void> _attachPollData(List<PostModel> posts) async {
+    final pollPostIds = posts
+        .where((p) => p.postType == PostType.poll)
+        .map((p) => p.id)
+        .toList();
+    if (pollPostIds.isEmpty) return;
+
+    final currentUserId = _supabaseService.currentUser?.id;
+
+    try {
+      final optionsResp = await _supabaseService.client
+          .from('post_poll_options')
+          .select('id, post_id, label, sort_order, post_poll_votes(user_id)')
+          .inFilter('post_id', pollPostIds)
+          .order('sort_order');
+
+      final optionsByPost = <String, List<PollOptionModel>>{};
+      final userVotesByPost = <String, String>{};
+
+      for (final row in (optionsResp as List)) {
+        final postId = row['post_id'] as String;
+        final optionId = row['id'] as String;
+        final votes = (row['post_poll_votes'] as List? ?? []);
+        final voteCount = votes.length;
+
+        if (currentUserId != null) {
+          for (final vote in votes) {
+            if (vote['user_id'] == currentUserId) {
+              userVotesByPost[postId] = optionId;
+            }
+          }
+        }
+
+        optionsByPost.putIfAbsent(postId, () => []).add(
+              PollOptionModel(
+                id: optionId,
+                label: row['label'] as String,
+                sortOrder: (row['sort_order'] as int?) ?? 0,
+                voteCount: voteCount,
+              ),
+            );
       }
-    });
+
+      for (var i = 0; i < posts.length; i++) {
+        final post = posts[i];
+        if (post.postType != PostType.poll) continue;
+        posts[i] = post.copyWith(
+          pollOptions: optionsByPost[post.id] ?? const [],
+          userVoteOptionId: userVotesByPost[post.id],
+        );
+      }
+    } catch (e) {
+      debugPrint('[VictoryWall] Error loading poll data: $e');
+    }
+  }
+
+  /// Cast a vote on a community poll (one vote per user per poll).
+  Future<Map<String, dynamic>> voteOnPoll({
+    required String postId,
+    required String optionId,
+  }) async {
+    if (!_supabaseService.isAuthenticated) {
+      return {'success': false, 'message': 'Please sign in to vote.'};
+    }
+
+    try {
+      await _supabaseService.client.rpc('cast_poll_vote', params: {
+        'p_post_id': postId,
+        'p_option_id': optionId,
+      });
+
+      final index = _posts.indexWhere((p) => p.id == postId);
+      if (index != -1) {
+        final post = _posts[index];
+        final updatedOptions = post.pollOptions.map((opt) {
+          if (opt.id == optionId) {
+            return opt.copyWith(voteCount: opt.voteCount + 1);
+          }
+          return opt;
+        }).toList();
+
+        _posts[index] = post.copyWith(
+          pollOptions: updatedOptions,
+          userVoteOptionId: optionId,
+        );
+        notifyListeners();
+      }
+
+      return {'success': true};
+    } catch (e) {
+      debugPrint('Error voting on poll: $e');
+      final message = e.toString().contains('already voted')
+          ? 'You have already voted in this poll.'
+          : e.toString().contains('ended')
+              ? 'This poll has ended.'
+              : 'Failed to submit vote. Please try again.';
+      return {'success': false, 'message': message};
+    }
+  }
+
+  /// Refresh feed after admin creates a poll or announcement.
+  Future<void> refreshAfterAdminPost() async {
+    _lastFetchTime = null;
+    await _fetchPostsFromDatabase(ignoreCache: true);
+    notifyListeners();
+  }
+
+  void _listenToAuthChanges() {
+    try {
+      // Check if Supabase is initialized before trying to access it
+      // This prevents crashes when providers are created before Supabase.initialize() completes
+      if (!_supabaseService.isAuthenticated && _supabaseService.currentUser == null) {
+        // Supabase not yet initialized - defer auth listener setup
+        debugPrint('PostProvider: Supabase not ready, deferring auth listener setup');
+        // Schedule retry after a delay to allow Supabase initialization to complete
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (_authSub == null) {
+            _listenToAuthChanges();
+          }
+        });
+        return;
+      }
+
+      // Reset/refresh posts when auth state changes to prevent cross-user leakage
+      _authSub = _supabaseService.client.auth.onAuthStateChange.listen((data) {
+        final event = data.event;
+        switch (event) {
+          case AuthChangeEvent.signedOut:
+            _posts = [];
+            notifyListeners();
+            break;
+          case AuthChangeEvent.signedIn:
+          case AuthChangeEvent.tokenRefreshed:
+          case AuthChangeEvent.userUpdated:
+            maybeRefreshPosts(minAge: const Duration(seconds: 30));
+            break;
+          default:
+            break;
+        }
+      });
+      debugPrint('PostProvider: Auth listener setup complete');
+    } catch (e) {
+      // If Supabase.instance throws because it's not initialized yet, retry later
+      debugPrint('PostProvider: Error setting up auth listener (will retry): $e');
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (_authSub == null) {
+          _listenToAuthChanges();
+        }
+      });
+    }
   }
 
   // Rate limiting: Check if user can post (5 minute cooldown)
@@ -598,44 +748,49 @@ class PostProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Delete a post (admin only)
-  /// Returns true if successful, false otherwise
-  Future<bool> deletePost(String postId, {required bool isAdmin}) async {
-    if (!isAdmin) {
-      debugPrint('❌ Unauthorized: Only admins can delete posts');
-      _lastError = 'Unauthorized: Only admins can delete posts';
-      notifyListeners();
-      return false;
-    }
-
+  /// Delete a post.
+  /// Owners can delete their own user posts; admins can delete any post,
+  /// including announcements and polls (via delete_victory_post RPC).
+  Future<bool> deletePost(String postId, {bool isAdmin = false}) async {
     try {
-      // Delete from database if authenticated
-      if (_supabaseService.isAuthenticated) {
-        // Delete comments first (foreign key constraint)
-        await _supabaseService.client
-            .from('post_comments')
-            .delete()
-            .eq('post_id', postId);
-
-        // Delete likes
-        await _supabaseService.client
-            .from('post_likes')
-            .delete()
-            .eq('post_id', postId);
-
-        // Delete the post
-        await _supabaseService.client
-            .from('posts')
-            .delete()
-            .eq('id', postId);
-
-        debugPrint('✅ Post deleted from database: $postId');
+      if (!_supabaseService.isAuthenticated) {
+        _lastError = 'You must be signed in to delete a post.';
+        notifyListeners();
+        return false;
       }
 
-      // Remove from local state
-      _posts.removeWhere((post) => post.id == postId);
-      notifyListeners();
+      final currentUserId = _supabaseService.currentUser?.id;
+      final existing = _posts.where((p) => p.id == postId).toList();
+      final post = existing.isEmpty ? null : existing.first;
+      final isOwner =
+          post != null && currentUserId != null && post.userId == currentUserId;
+      final isAdminContent = post?.isAdminPost == true || post?.isPoll == true;
 
+      if (isAdminContent && !isAdmin) {
+        _lastError = 'Only admins can delete announcements and polls.';
+        notifyListeners();
+        return false;
+      }
+
+      if (!isAdmin && !isOwner) {
+        _lastError = 'You can only delete your own posts.';
+        notifyListeners();
+        return false;
+      }
+
+      final result = await _supabaseService.client.rpc(
+        'delete_victory_post',
+        params: {'p_post_id': postId},
+      );
+
+      if (result != true) {
+        _lastError = 'Failed to delete post. Please try again.';
+        notifyListeners();
+        return false;
+      }
+
+      _posts.removeWhere((p) => p.id == postId);
+      notifyListeners();
       debugPrint('✅ Post deleted successfully: $postId');
       return true;
     } catch (e) {

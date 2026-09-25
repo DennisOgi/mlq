@@ -7,6 +7,10 @@ import '../../models/models.dart';
 import '../../providers/providers.dart';
 import '../../widgets/widgets.dart';
 import '../../utils/date_utils.dart';
+import '../../utils/app_tab_navigation.dart';
+import '../../utils/course_visuals.dart';
+import '../onboarding/goal_onboarding_screen.dart';
+import 'daily_goal_grid_screen.dart';
 
 class GoalsScreen extends StatefulWidget {
   final bool isInHomeScreen;
@@ -19,136 +23,183 @@ class GoalsScreen extends StatefulWidget {
 
 class _GoalsScreenState extends State<GoalsScreen> {
   DateTime _selectedDate = DateTime.now();
+  int _categoryIndex = 0;
+
+  static const _categoryLabels = ['All', 'Academic', 'Social', 'Health'];
+  static const _categories = <GoalCategory?>[
+    null,
+    GoalCategory.academic,
+    GoalCategory.social,
+    GoalCategory.health,
+  ];
+
+  GoalCategory? get _category => _categories[_categoryIndex];
+
+  bool _inCategory(GoalCategory? c) => _category == null || c == _category;
 
   @override
   Widget build(BuildContext context) {
-    // Create the content widget with loading state
     final content = Consumer<GoalProvider>(
       builder: (context, goalProvider, child) {
-        // Show loading state while goals are being fetched
         if (goalProvider.isLoading && !goalProvider.isInitialized) {
           return const SafeArea(
-            child: Center(
+            child: MlqLoadingState(message: 'Loading your goals...'),
+          );
+        }
+
+        final user = Provider.of<UserProvider>(context).user;
+        final todayGoals = goalProvider.getDailyGoalsForDate(DateTime.now());
+        final doneToday = todayGoals.where((g) => g.isCompleted).length;
+        final mainGoals = [
+          ...goalProvider.mainGoals,
+          ...goalProvider.expiredGoals,
+        ].where((g) => _inCategory(g.category)).toList();
+
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final isDesktop = constraints.maxWidth > 800;
+            final maxWidth = isDesktop ? 1080.0 : double.infinity;
+
+            return SingleChildScrollView(
+              padding: const EdgeInsets.only(bottom: 32),
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text(
-                    'Loading your goals...',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.grey,
+                  MlqHeroHeader(
+                    title: 'My',
+                    highlight: 'Goals',
+                    subtitle: todayGoals.isEmpty
+                        ? 'Plan today with up to 3 daily goals'
+                        : '$doneToday of ${todayGoals.length} daily goals done today',
+                    showBack:
+                        !widget.isInHomeScreen && Navigator.of(context).canPop(),
+                    bottom: MlqHeroStats(
+                      items: [
+                        (
+                          value: '$doneToday/${todayGoals.length}',
+                          label: 'Today',
+                          icon: Icons.task_alt_rounded,
+                        ),
+                        (
+                          value: '${user?.currentStreak ?? 0}',
+                          label: 'Day streak',
+                          icon: Icons.local_fire_department_rounded,
+                        ),
+                        (
+                          value: '${goalProvider.activeGoalsCount}',
+                          label: 'Main goals',
+                          icon: Icons.flag_rounded,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: maxWidth),
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                            horizontal: isDesktop ? 24 : 16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SizedBox(height: 16),
+                            MlqSegmentTabs(
+                              labels: _categoryLabels,
+                              selected: _categoryIndex,
+                              onChanged: (i) =>
+                                  setState(() => _categoryIndex = i),
+                            ),
+                            const SizedBox(height: 16),
+                            _buildMainGoals(mainGoals, goalProvider),
+                            const SizedBox(height: 24),
+                            _buildDateSelector(),
+                            const SizedBox(height: 14),
+                            _buildDailyGoalsList(goalProvider),
+                            const SizedBox(height: 16),
+                            if (AppDateUtils.isToday(_selectedDate))
+                              _buildAddDailyGoalButton(todayGoals.length),
+                            const SizedBox(height: 28),
+                            const MlqSectionHeader(
+                              title: 'This week',
+                              icon: Icons.insights_rounded,
+                            ),
+                            const SizedBox(height: 12),
+                            const WeeklyProgressGraph(),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ],
               ),
-            ),
-          );
-        }
-
-        // Show main content when loaded
-        return SafeArea(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final isDesktop = constraints.maxWidth > 800;
-              final maxWidth = isDesktop ? 900.0 : double.infinity;
-              
-              return Center(
-                child: Container(
-                  constraints: BoxConstraints(maxWidth: maxWidth),
-                  child: SingleChildScrollView(
-                    padding: EdgeInsets.all(isDesktop ? 24 : 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Weekly progress graph
-                        const WeeklyProgressGraph(),
-                        const SizedBox(height: 24),
-
-                        // Date selector
-                        _buildDateSelector(),
-                        const SizedBox(height: 16),
-
-                        // Daily goals for selected date
-                        _buildDailyGoalsList(),
-                        const SizedBox(height: 24),
-
-                        // Automatic synchronization happens in initGoals() - no manual button needed
-
-                        // Add daily goal button - only for today & limit 3
-                        if (AppDateUtils.isToday(_selectedDate))
-                          Consumer<GoalProvider>(
-                              builder: (context, goalProvider, _) {
-                            final todaysGoals = goalProvider
-                                .getDailyGoalsForDate(DateTime.now());
-                            final canAddMoreGoals = todaysGoals.length < 3;
-
-                            return QuestButton(
-                              text: canAddMoreGoals
-                                  ? 'Add Daily Goal (${todaysGoals.length}/3)'
-                                  : 'Daily Goal Limit Reached (3/3)',
-                              icon: canAddMoreGoals
-                                  ? Icons.add
-                                  : Icons.check_circle,
-                              type: canAddMoreGoals
-                                  ? QuestButtonType.primary
-                                  : QuestButtonType.outline,
-                              isFullWidth: true,
-                              onPressed: canAddMoreGoals
-                                  ? () => _showAddDailyGoalDialog(context)
-                                  : () {
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        SnackBar(
-                                          content: Text(
-                                            'You can only set 3 daily goals per day. Complete or delete existing goals to add more.',
-                                            style: AppTextStyles.body
-                                                .copyWith(color: Colors.white),
-                                          ),
-                                          backgroundColor: AppColors.secondary,
-                                        ),
-                                      );
-                                    },
-                            );
-                          }),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
+            );
+          },
         );
       },
     );
 
-    // If this screen is displayed within the HomeScreen, return just the content
-    // Otherwise, wrap it in a Scaffold with AppBar
     if (widget.isInHomeScreen) {
       return content;
     }
 
-    // Return the full Scaffold when shown as a standalone screen
-    return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            const Icon(Icons.flag_rounded,
-                size: 28, color: AppColors.secondary),
-            const SizedBox(width: 8),
-            Text(
-              'My Goals',
-              style: AppTextStyles.heading3.copyWith(color: Colors.white),
-            ),
-          ],
+    return Scaffold(body: content);
+  }
+
+  // ── Main goals ──────────────────────────────────────────────
+
+  Widget _buildMainGoals(
+      List<MainGoalModel> goals, GoalProvider goalProvider) {
+    if (goals.isEmpty) {
+      final hasAny = goalProvider.mainGoals.isNotEmpty ||
+          goalProvider.expiredGoals.isNotEmpty;
+      final label = _categoryLabels[_categoryIndex].toLowerCase();
+      return _GoalEmptyCard(
+        cover: MlqCourseVisuals.goalCoverFor(
+          _category?.name ?? 'academic',
+          gender: context.read<UserProvider>().user?.gender,
         ),
-        backgroundColor: AppColors.primary,
-        elevation: 0,
-      ),
-      body: content,
+        title: hasAny ? 'No $label goal yet' : 'Set your main goals',
+        message: hasAny
+            ? 'Add a $label main goal from the Home screen to balance your quest.'
+            : 'Pick one academic, social and health goal to start your quest.',
+        actionLabel: hasAny ? 'Go to Home' : 'Set goals',
+        onAction: () {
+          if (hasAny) {
+            AppTabNavigation.goToTab(0);
+            if (!widget.isInHomeScreen) Navigator.of(context).maybePop();
+          } else {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const GoalOnboardingScreen()),
+            );
+          }
+        },
+      );
+    }
+
+    final featured = goals.first;
+    final rest = goals.skip(1).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _FeaturedGoalCard(goal: featured, onOpen: () => _openGoal(featured)),
+        if (rest.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          for (final g in rest) ...[
+            _GoalRow(goal: g, onTap: () => _openGoal(g)),
+            const SizedBox(height: 10),
+          ],
+        ],
+      ],
     );
   }
+
+  void _openGoal(MainGoalModel goal) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => DailyGoalGridScreen(mainGoal: goal)),
+    );
+  }
+
+  // ── Daily goals ─────────────────────────────────────────────
 
   Widget _buildDateSelector() {
     final now = DateTime.now();
@@ -159,42 +210,69 @@ class _GoalsScreenState extends State<GoalsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Daily Goals',
-          style: AppTextStyles.heading2,
+        const MlqSectionHeader(
+          title: 'Daily check-in',
+          icon: Icons.today_rounded,
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 12),
         SizedBox(
-          height: 90,
-          child: ListView.builder(
+          height: 68,
+          child: ListView.separated(
             scrollDirection: Axis.horizontal,
             itemCount: dates.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
             itemBuilder: (context, index) {
               final date = dates[index];
               final isSelected = AppDateUtils.isSameDay(date, _selectedDate);
               final isToday = AppDateUtils.isToday(date);
 
-              return GestureDetector(
-                onTap: () {
-                  setState(() {
-                    _selectedDate = date;
-                  });
-                },
-                child: Container(
-                  width: 60,
-                  margin: const EdgeInsets.only(right: 12),
-                  decoration: BoxDecoration(
-                    color: isSelected ? AppColors.secondary : Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey.shade300),
-                  ),
-                  child: Center(
-                    child: Text(
-                      DateFormat('d').format(date),
-                      style: TextStyle(
-                        color: isSelected ? Colors.white : Colors.black,
-                        fontWeight: FontWeight.bold,
+              return Material(
+                color: isSelected ? AppColors.plum : AppColors.surface,
+                borderRadius: BorderRadius.circular(16),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () => setState(() => _selectedDate = date),
+                  child: Container(
+                    width: 52,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: isSelected
+                            ? AppColors.plum
+                            : isToday
+                                ? AppColors.secondary
+                                : AppColors.border,
+                        width: isToday && !isSelected ? 1.5 : 1,
                       ),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          DateFormat('EEE').format(date).toUpperCase(),
+                          style: TextStyle(
+                            fontFamily: 'Nunito',
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.6,
+                            color: isSelected
+                                ? Colors.white.withOpacity(0.75)
+                                : AppColors.textHint,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          DateFormat('d').format(date),
+                          style: TextStyle(
+                            fontFamily: 'Nunito',
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
+                            color: isSelected
+                                ? Colors.white
+                                : AppColors.textPrimary,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -206,71 +284,67 @@ class _GoalsScreenState extends State<GoalsScreen> {
     );
   }
 
-  Widget _buildDailyGoalsList() {
-    final goalProvider = Provider.of<GoalProvider>(context);
+  Widget _buildDailyGoalsList(GoalProvider goalProvider) {
     final startOfDay =
         DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
     final endOfDay = DateTime(
         _selectedDate.year, _selectedDate.month, _selectedDate.day, 23, 59, 59);
 
-    // Filter goals for the selected date
+    final categoryById = {
+      for (final g in [...goalProvider.mainGoals, ...goalProvider.expiredGoals])
+        g.id: g.category,
+    };
+
     final goalsForDay = goalProvider.dailyGoals.where((goal) {
-      return (goal.date.isAtSameMomentAs(startOfDay) ||
+      final inDay = (goal.date.isAtSameMomentAs(startOfDay) ||
               goal.date.isAfter(startOfDay)) &&
           (goal.date.isBefore(endOfDay) ||
               goal.date.isAtSameMomentAs(endOfDay));
+      return inDay && _inCategory(categoryById[goal.mainGoalId]);
     }).toList();
 
     if (goalsForDay.isEmpty) {
-      return Container(
-        padding: const EdgeInsets.all(24),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 10,
-              spreadRadius: 1,
-            ),
-          ],
-        ),
-        child: Column(
-          children: [
-            const Icon(
-              Icons.task_alt,
-              size: 48,
-              color: AppColors.tertiary,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              AppDateUtils.isToday(_selectedDate)
-                  ? 'No Goals for Today'
-                  : 'No Goals for ${AppDateUtils.formatMonthAndDay(_selectedDate)}',
-              style: AppTextStyles.heading3,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Add daily goals to make progress on your main goals!',
-              style: AppTextStyles.body,
-              textAlign: TextAlign.center,
-            ),
-          ],
+      return MlqSurface(
+        child: MlqEmptyState(
+          title: AppDateUtils.isToday(_selectedDate)
+              ? 'No Goals for Today'
+              : 'No Goals for ${AppDateUtils.formatMonthAndDay(_selectedDate)}',
+          message: 'Add a daily goal to keep your leadership streak going.',
+          icon: Icons.task_alt_rounded,
+          actionLabel:
+              AppDateUtils.isToday(_selectedDate) ? 'Add Daily Goal' : null,
+          onAction: () => _showAddDailyGoalDialog(context),
         ),
       );
     }
 
+    final completedCount = goalsForDay.where((g) => g.isCompleted).length;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          AppDateUtils.isToday(_selectedDate)
-              ? "Today's Goals"
-              : 'Goals for ${AppDateUtils.formatMonthAndDay(_selectedDate)}',
-          style: AppTextStyles.bodyBold,
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                AppDateUtils.isToday(_selectedDate)
+                    ? "Today's goals"
+                    : 'Goals for ${AppDateUtils.formatMonthAndDay(_selectedDate)}',
+                style: AppTextStyles.bodyBold,
+              ),
+            ),
+            Text(
+              '$completedCount/${goalsForDay.length} done',
+              style: AppTextStyles.caption.copyWith(
+                color: AppColors.textSecondary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 8),
+        MlqProgressBar(value: completedCount / goalsForDay.length),
+        const SizedBox(height: 12),
         ...goalsForDay.map((goal) => DailyGoalCard(
               goal: goal,
               showMainGoal: true,
@@ -278,65 +352,33 @@ class _GoalsScreenState extends State<GoalsScreen> {
                   ? null
                   : () => _showDeleteDailyGoalDialog(context, goal),
             )),
-        const SizedBox(height: 8),
-        // Completion status
-        _buildCompletionStatus(goalsForDay),
       ],
     );
   }
 
-  Widget _buildCompletionStatus(List<DailyGoalModel> goals) {
-    final completedCount = goals.where((goal) => goal.isCompleted).length;
-    final totalCount = goals.length;
-    final completionRate = totalCount > 0 ? completedCount / totalCount : 0.0;
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 5,
-            spreadRadius: 1,
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Completion Status',
-                style: AppTextStyles.bodyBold,
-              ),
-              Text(
-                '$completedCount/$totalCount completed',
-                style: AppTextStyles.caption.copyWith(
-                  color: AppColors.textSecondary,
+  Widget _buildAddDailyGoalButton(int todayCount) {
+    final canAddMoreGoals = todayCount < 3;
+    return QuestButton(
+      text: canAddMoreGoals
+          ? 'Add Daily Goal ($todayCount/3)'
+          : 'Daily Goal Limit Reached (3/3)',
+      icon: canAddMoreGoals ? Icons.add : Icons.check_circle,
+      type: canAddMoreGoals ? QuestButtonType.primary : QuestButtonType.outline,
+      isFullWidth: true,
+      onPressed: canAddMoreGoals
+          ? () => _showAddDailyGoalDialog(context)
+          : () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'You can only set 3 daily goals per day. Delete an existing goal to add another.',
+                    style: AppTextStyles.body.copyWith(color: Colors.white),
+                  ),
+                  backgroundColor: AppColors.primary,
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          QuestProgressIndicator(
-            progress: completionRate,
-            color: _getProgressColor(completionRate),
-            showPercentage: true,
-          ),
-        ],
-      ),
+              );
+            },
     );
-  }
-
-  Color _getProgressColor(double rate) {
-    if (rate >= 0.8) return AppColors.tertiary;
-    if (rate >= 0.5) return AppColors.primary;
-    if (rate > 0) return AppColors.secondary;
-    return Colors.grey.shade300;
   }
 
   void _showAddDailyGoalDialog(BuildContext context) {
@@ -476,8 +518,6 @@ class _GoalsScreenState extends State<GoalsScreen> {
 
                           switch (status) {
                             case AddDailyGoalStatus.createdOnline:
-                              // Award coins only when created online to prevent farming
-                              userProvider.addCoins(0.5);
                               if (context.mounted) {
                                 Navigator.pop(context);
                                 ScaffoldMessenger.of(context).showSnackBar(
@@ -512,7 +552,8 @@ class _GoalsScreenState extends State<GoalsScreen> {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text(
-                                      'Daily goal limit reached (3/3).',
+                                      goalProvider.lastDailyGoalError ??
+                                          'You can only set 3 daily goals per day.',
                                       style: AppTextStyles.body
                                           .copyWith(color: Colors.white),
                                     ),
@@ -521,16 +562,34 @@ class _GoalsScreenState extends State<GoalsScreen> {
                                 );
                               }
                               break;
+                            case AddDailyGoalStatus.unrelated:
                             case AddDailyGoalStatus.failed:
                               if (context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text(
-                                      'Failed to add daily goal. Please try again.',
+                                      goalProvider.lastDailyGoalError ??
+                                          'Failed to add daily goal. Please try again.',
                                       style: AppTextStyles.body
                                           .copyWith(color: Colors.white),
                                     ),
                                     backgroundColor: AppColors.error,
+                                  ),
+                                );
+                              }
+                              break;
+                            case AddDailyGoalStatus.cloned:
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      goalProvider.lastDailyGoalError ??
+                                          'You already used that same daily goal under a different main goal today. Write a different task.',
+                                      style: AppTextStyles.body
+                                          .copyWith(color: Colors.white),
+                                    ),
+                                    backgroundColor: AppColors.error,
+                                    duration: const Duration(seconds: 5),
                                   ),
                                 );
                               }
@@ -632,26 +691,321 @@ class _GoalsScreenState extends State<GoalsScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.error,
               ),
-              onPressed: () {
-                goalProvider.deleteDailyGoal(goal.id);
-                Navigator.pop(context);
+              onPressed: () async {
+                await goalProvider.deleteDailyGoal(goal.id);
 
-                // Show success message
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Daily goal deleted',
-                      style: AppTextStyles.body.copyWith(color: Colors.white),
+                if (context.mounted) {
+                  Navigator.pop(context);
+
+                  // Show success message
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Daily goal deleted',
+                        style: AppTextStyles.body.copyWith(color: Colors.white),
+                      ),
+                      backgroundColor: AppColors.error,
                     ),
-                    backgroundColor: AppColors.error,
-                  ),
-                );
+                  );
+                }
               },
               child: const Text('Delete'),
             ),
           ],
         );
       },
+    );
+  }
+}
+
+IconData _categoryIcon(GoalCategory c) {
+  switch (c) {
+    case GoalCategory.academic:
+      return Icons.school_rounded;
+    case GoalCategory.social:
+      return Icons.people_rounded;
+    case GoalCategory.health:
+      return Icons.favorite_rounded;
+  }
+}
+
+BoxDecoration _cardDecoration() => BoxDecoration(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(AppSizes.radiusL),
+      border: Border.all(color: AppColors.border),
+      boxShadow: [
+        BoxShadow(
+          color: AppColors.plum.withOpacity(0.06),
+          blurRadius: 14,
+          offset: const Offset(0, 5),
+        ),
+      ],
+    );
+
+class _FeaturedGoalCard extends StatelessWidget {
+  final MainGoalModel goal;
+  final VoidCallback onOpen;
+
+  const _FeaturedGoalCard({required this.goal, required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = goal.progressPercentage;
+    final wide = MediaQuery.sizeOf(context).width >= 800;
+    final art = Stack(
+      fit: StackFit.expand,
+      children: [
+        MlqCoverImage(
+          asset: MlqCourseVisuals.goalCoverFor(
+            goal.category.name,
+            seed: goal.id,
+            gender: context.read<UserProvider>().user?.gender,
+          ),
+          fallbackIcon: _categoryIcon(goal.category),
+        ),
+        Positioned(
+          left: 12,
+          top: 12,
+          child: MlqPill(
+            label: goal.categoryName,
+            icon: _categoryIcon(goal.category),
+            background: Colors.white,
+          ),
+        ),
+        if (goal.isCompleted || goal.isExpired)
+          Positioned(
+            right: 12,
+            top: 12,
+            child: MlqPill(
+              label: goal.isCompleted ? 'Completed' : 'Expired',
+              icon: goal.isCompleted
+                  ? Icons.check_rounded
+                  : Icons.schedule_rounded,
+              background:
+                  goal.isCompleted ? AppColors.success : AppColors.error,
+              foreground: Colors.white,
+            ),
+          ),
+      ],
+    );
+    final details = Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            goal.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: AppTextStyles.heading3.copyWith(height: 1.2),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${goal.currentXp} / ${goal.totalXpRequired} XP',
+                  style: AppTextStyles.caption.copyWith(
+                    color: AppColors.textSecondary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              Text(
+                '${(pct * 100).round()}%',
+                style: AppTextStyles.caption.copyWith(
+                  color: AppColors.goldText,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          MlqProgressBar(value: pct),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              const Icon(Icons.event_rounded,
+                  size: 16, color: AppColors.textSecondary),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  '${goal.timelineText} · Ends ${DateFormat('MMM d').format(goal.endDate)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTextStyles.caption.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          QuestButton(
+            text: goal.isCompleted || goal.isExpired
+                ? 'View goal'
+                : 'Update progress',
+            type: QuestButtonType.secondary,
+            height: 44,
+            isFullWidth: true,
+            onPressed: onOpen,
+          ),
+        ],
+      ),
+    );
+
+    return Container(
+      decoration: _cardDecoration(),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onOpen,
+          child: wide
+              ? Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(width: 280, height: 210, child: art),
+                    Expanded(child: details),
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    AspectRatio(aspectRatio: 16 / 10, child: art),
+                    details,
+                  ],
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GoalRow extends StatelessWidget {
+  final MainGoalModel goal;
+  final VoidCallback onTap;
+
+  const _GoalRow({required this.goal, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: _cardDecoration(),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: SizedBox(
+                    width: 72,
+                    height: 72,
+                    child: MlqCoverImage(
+                      asset:
+                          MlqCourseVisuals.goalCoverFor(
+                            goal.category.name,
+                            seed: goal.id,
+                            gender: context.read<UserProvider>().user?.gender,
+                          ),
+                      fallbackIcon: _categoryIcon(goal.category),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        goal.categoryName.toUpperCase(),
+                        style: AppTextStyles.caption.copyWith(
+                          color: AppColors.goldText,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.8,
+                          fontSize: 11,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        goal.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyles.bodyBold,
+                      ),
+                      const SizedBox(height: 8),
+                      MlqProgressBar(value: goal.progressPercentage, height: 6),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Icon(Icons.chevron_right_rounded,
+                    color: AppColors.primary),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GoalEmptyCard extends StatelessWidget {
+  final String cover;
+  final String title;
+  final String message;
+  final String actionLabel;
+  final VoidCallback onAction;
+
+  const _GoalEmptyCard({
+    required this.cover,
+    required this.title,
+    required this.message,
+    required this.actionLabel,
+    required this.onAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: _cardDecoration(),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AspectRatio(
+            aspectRatio: 16 / 10,
+            child: MlqCoverImage(asset: cover),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: AppTextStyles.heading3),
+                const SizedBox(height: 4),
+                Text(
+                  message,
+                  style: AppTextStyles.bodySmall
+                      .copyWith(color: AppColors.textSecondary),
+                ),
+                const SizedBox(height: 14),
+                QuestButton(
+                  text: actionLabel,
+                  type: QuestButtonType.primary,
+                  height: 44,
+                  onPressed: onAction,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

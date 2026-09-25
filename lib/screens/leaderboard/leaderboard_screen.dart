@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 import '../../models/user_model.dart';
 import '../../providers/user_provider.dart';
 import '../../constants/app_constants.dart';
-import '../../widgets/enhanced_app_bar.dart';
+import '../../widgets/mlq_ui_primitives.dart';
 import '../../widgets/username_with_checkmark.dart';
 import '../../providers/providers.dart';
 import 'package:my_leadership_quest/screens/profile/profile_screen.dart';
@@ -179,80 +179,15 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
         // Split into top 3 and the rest
         final topThree = leaderboardUsers.take(3).toList();
         final restOfUsers = leaderboardUsers.skip(3).toList();
+        // Pin the student's own row when it's likely below the fold.
+        final ownIndex = restOfUsers.indexWhere((u) => u.id == currentUser?.id);
+        final myIndex = ownIndex >= 5 ? ownIndex : -1;
 
         return Column(
           children: [
-            // Add a little breathing space under the app bar
-            const SizedBox(height: 12),
-            if (userProvider.leaderboardView == LeaderboardView.school)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8.0),
-                child: hasSchool &&
-                        (_cachedSchoolName != null &&
-                            _cachedSchoolName!.isNotEmpty)
-                    ? Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 8),
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              AppColors.primary.withOpacity(0.95),
-                              AppColors.secondary.withOpacity(0.95),
-                            ],
-                          ),
-                          borderRadius: BorderRadius.circular(16),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.08),
-                              blurRadius: 10,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                          border: Border.all(
-                              color: Colors.white.withOpacity(0.18), width: 1),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.school_rounded,
-                                color: Colors.white, size: 18),
-                            const SizedBox(width: 8),
-                            Flexible(
-                              child: RichText(
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                text: TextSpan(
-                                  children: [
-                                    TextSpan(
-                                      text: _cachedSchoolName!,
-                                      style: AppTextStyles.bodyBold.copyWith(
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                    TextSpan(
-                                      text: '  Leaderboard',
-                                      style: AppTextStyles.body.copyWith(
-                                        color: Colors.white.withOpacity(0.95),
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                        .animate()
-                        .fadeIn(duration: 350.ms)
-                        .slideY(begin: -0.1, end: 0, curve: Curves.easeOut)
-                    : const SizedBox.shrink(),
-              ),
             const SizedBox(height: 4),
             // Top 3 Podium
-            _buildTopThreePodium(topThree),
+            _buildTopThreePodium(topThree, showSchool: !isSchoolView),
 
             // Monthly reset notice - only show in first 3 days of month
             if (_shouldShowResetNotice)
@@ -262,24 +197,16 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      AppColors.tertiary.withOpacity(0.15),
-                      AppColors.secondary.withOpacity(0.1),
-                    ],
-                  ),
+                  color: AppColors.primarySoft,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: AppColors.tertiary.withOpacity(0.3),
-                    width: 1,
-                  ),
+                  border: Border.all(color: AppColors.border),
                 ),
                 child: Row(
                   children: [
-                    Icon(
+                    const Icon(
                       Icons.refresh_rounded,
                       size: 18,
-                      color: AppColors.tertiary,
+                      color: AppColors.primary,
                     ),
                     const SizedBox(width: 8),
                     Expanded(
@@ -295,26 +222,17 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
                 ),
               ).animate().fadeIn(delay: 300.ms, duration: 400.ms),
 
-            // Divider with "Rankings" text
             Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
               child: Row(
                 children: [
-                  const Expanded(
-                    child: Divider(thickness: 2),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                    child: Text(
-                      'Rankings',
-                      style: AppTextStyles.heading1.copyWith(
-                        color: AppColors.secondary,
-                      ),
-                    ),
-                  ),
-                  const Expanded(
-                    child: Divider(thickness: 2),
+                  const Icon(Icons.format_list_numbered_rounded,
+                      size: 18, color: AppColors.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Rankings',
+                    style: AppTextStyles.sectionHeader
+                        .copyWith(color: AppColors.primary),
                   ),
                 ],
               ),
@@ -323,116 +241,102 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
             // Rest of the leaderboard
             Expanded(
               child: ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 itemCount: restOfUsers.length,
                 itemBuilder: (context, index) {
                   final user = restOfUsers[index];
-                  final rank = userProvider.leaderboardView ==
-                          LeaderboardView.school
-                      ? (user.rank ?? (index + 4))
-                      : (index + 4); // +4 because we already displayed top 3
+                  final rank = _rankFor(userProvider, user, index);
 
                   return _buildLeaderboardItem(
-                      user, rank, currentUser?.id == user.id);
+                    user,
+                    rank,
+                    currentUser?.id == user.id,
+                    showSchool: !isSchoolView,
+                  );
                 },
               ),
             ),
+            if (myIndex >= 0)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                child: _buildLeaderboardItem(
+                  restOfUsers[myIndex],
+                  _rankFor(userProvider, restOfUsers[myIndex], myIndex),
+                  true,
+                  showSchool: !isSchoolView,
+                  animate: false,
+                ),
+              ),
           ],
         );
       },
     );
 
-    // If this screen is displayed within the HomeScreen, return just the content with a header
-    if (widget.isInHomeScreen) {
-      return Column(
-        children: [
-          Container(
-            color: Colors.transparent,
-            padding: const EdgeInsets.all(8.0),
-            child: Center(
-              child: Text(
-                'Monthly Leaderboard',
-                style:
-                    AppTextStyles.heading1.copyWith(color: AppColors.primary),
-              ),
-            ),
-          ),
-          Expanded(child: content),
-        ],
-      );
-    }
+    final page = Column(
+      children: [
+        Consumer<UserProvider>(
+          builder: (context, userProvider, _) {
+            final hasSchool = userProvider.user?.schoolId != null;
+            final isSchoolView =
+                userProvider.leaderboardView == LeaderboardView.school;
+            final now = DateTime.now();
+            final daysLeft =
+                DateTime(now.year, now.month + 1).difference(now).inDays + 1;
+            final reset = daysLeft <= 1 ? 'Resets tomorrow' : 'Resets in $daysLeft days';
+            final scope = isSchoolView
+                ? (_cachedSchoolName ?? 'My school')
+                : 'All schools';
 
-    // Return the full Scaffold when shown as a standalone screen
-    return Scaffold(
-      appBar: EnhancedAppBar(
-        title: 'Monthly Leaderboard',
-        showNotificationBadge: false,
-        backgroundColor: AppColors.primary,
-        actions: [
-          Consumer<UserProvider>(
-            builder: (context, userProvider, _) {
-              final isSchoolView =
-                  userProvider.leaderboardView == LeaderboardView.school;
-              final hasSchool = userProvider.user?.schoolId != null;
-
-              return Row(
-                children: [
-                  IconButton(
-                    tooltip: 'Global leaderboard',
-                    icon: Icon(
-                      Icons.public,
-                      color: !isSchoolView ? Colors.white : Colors.white70,
+            return MlqHeroHeader(
+              title: 'Monthly',
+              highlight: 'Ranks',
+              subtitle: '$scope · $reset',
+              artAsset: null,
+              showBack:
+                  !widget.isInHomeScreen && Navigator.of(context).canPop(),
+              action: Material(
+                color: Colors.white.withOpacity(0.12),
+                shape: const CircleBorder(),
+                child: IconButton(
+                  tooltip: 'Hall of Fame',
+                  icon: const Icon(Icons.emoji_events_rounded,
+                      color: AppColors.secondary),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const HallOfFameScreen(),
                     ),
-                    onPressed: () =>
-                        userProvider.setLeaderboardView(LeaderboardView.global),
                   ),
-                  if (hasSchool)
-                    IconButton(
-                      tooltip: 'My school leaderboard',
-                      icon: Icon(
-                        Icons.school,
-                        color: isSchoolView ? Colors.white : Colors.white70,
-                      ),
-                      onPressed: () => userProvider
-                          .setLeaderboardView(LeaderboardView.school),
-                    ),
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-      body: content,
-      floatingActionButton: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(18),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.16),
-              blurRadius: 18,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: FloatingActionButton(
-          heroTag: 'hall_of_fame_fab',
-          onPressed: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (context) => const HallOfFameScreen(),
+                ),
               ),
+              bottom: hasSchool
+                  ? MlqSegmentTabs(
+                      labels: const ['All schools', 'My School'],
+                      selected: isSchoolView ? 1 : 0,
+                      onDark: true,
+                      onChanged: (i) => userProvider.setLeaderboardView(
+                          i == 1
+                              ? LeaderboardView.school
+                              : LeaderboardView.global),
+                    )
+                  : null,
             );
           },
-          backgroundColor: AppColors.secondary,
-          foregroundColor: Colors.black,
-          elevation: 0,
-          child: const Icon(Icons.emoji_events_rounded),
         ),
-      ),
+        Expanded(child: content),
+      ],
     );
+
+    if (widget.isInHomeScreen) return page;
+    return Scaffold(body: page);
   }
 
-  Widget _buildTopThreePodium(List<UserModel> topThree) {
+  int _rankFor(UserProvider userProvider, UserModel user, int index) {
+    return userProvider.leaderboardView == LeaderboardView.school
+        ? (user.rank ?? (index + 4))
+        : (index + 4); // +4 because the podium shows the top 3
+  }
+  Widget _buildTopThreePodium(List<UserModel> topThree,
+      {bool showSchool = false}) {
     final displayUsers = List<UserModel?>.from(topThree);
     while (displayUsers.length < 3) displayUsers.add(null);
 
@@ -443,7 +347,7 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       child: SizedBox(
-        height: 270,
+        height: showSchool ? 292 : 270,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           mainAxisAlignment: MainAxisAlignment.center,
@@ -460,6 +364,7 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
                       rank: 2,
                       color: const Color(0xFFC0C0C0), // Silver
                       height: 70,
+                      showSchool: showSchool,
                     ),
                   ],
                 ),
@@ -477,6 +382,7 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
                       color: const Color(0xFFFFD700), // Gold
                       height: 90,
                       isFirst: true,
+                      showSchool: showSchool,
                       isHallOfFameChampion: _currentMonthChampionId != null &&
                           _currentMonthChampionId == first.id,
                     )
@@ -495,6 +401,7 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
                       rank: 3,
                       color: const Color(0xFFCD7F32), // Bronze
                       height: 55,
+                      showSchool: showSchool,
                     ),
                   ],
                 ),
@@ -514,6 +421,7 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
     required double height,
     bool isFirst = false,
     bool isHallOfFameChampion = false,
+    bool showSchool = false,
   }) {
     final avatarSize = isFirst ? 80.0 : 60.0;
     final fontSize = isFirst ? 16.0 : 14.0;
@@ -726,6 +634,24 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
             textAlign: TextAlign.center,
           ),
         ),
+        if (showSchool) ...[
+          const SizedBox(height: 2),
+          SizedBox(
+            width: isFirst ? 120 : 80,
+            child: Text(
+              (user.schoolName != null && user.schoolName!.trim().isNotEmpty)
+                  ? user.schoolName!.trim()
+                  : 'No school',
+              style: AppTextStyles.caption.copyWith(
+                fontSize: 10,
+                color: AppColors.textSecondary,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
         const SizedBox(height: 6),
         // XP badge with subtle floating animation - constrained to prevent overflow
         ConstrainedBox(
@@ -853,158 +779,126 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
         );
   }
 
-  Widget _buildLeaderboardItem(UserModel user, int rank, bool isCurrentUser) {
-    // Accent color cycles for variety (non-podium ranks)
-    final accentPalette = <Color>[
-      Colors.teal,
-      Colors.deepOrange,
-      Colors.indigo,
-      Colors.green,
-      Colors.pink,
-      Colors.blue,
-    ];
-    final accentColor = isCurrentUser
-        ? AppColors.primary
-        : accentPalette[rank % accentPalette.length];
-
-    return Container(
+  Widget _buildLeaderboardItem(
+    UserModel user,
+    int rank,
+    bool isCurrentUser, {
+    bool showSchool = false,
+    bool animate = true,
+  }) {
+    final row = Container(
       margin: const EdgeInsets.only(bottom: 8.0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            (isCurrentUser
-                ? AppColors.primary.withOpacity(0.15)
-                : AppColors.neumorphicHighlight.withOpacity(0.85)),
-            (isCurrentUser
-                ? AppColors.primary.withOpacity(0.08)
-                : AppColors.surface.withOpacity(0.9)),
-          ],
-        ),
-        borderRadius: BorderRadius.circular(14),
+        color: isCurrentUser
+            ? AppColors.secondary.withOpacity(0.22)
+            : AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isCurrentUser
-              ? AppColors.primary.withOpacity(0.4)
-              : accentColor.withOpacity(0.18),
-          width: isCurrentUser ? 2 : 1,
+          color: isCurrentUser ? AppColors.secondary : AppColors.border,
+          width: isCurrentUser ? 1.5 : 1,
         ),
         boxShadow: [
           BoxShadow(
-            color: isCurrentUser
-                ? AppColors.primary.withOpacity(0.12)
-                : Colors.black.withOpacity(0.05),
-            blurRadius: isCurrentUser ? 10 : 6,
+            color: AppColors.plum.withOpacity(isCurrentUser ? 0.10 : 0.04),
+            blurRadius: isCurrentUser ? 12 : 6,
             offset: const Offset(0, 3),
           ),
         ],
       ),
-      child: ListTile(
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6.0),
-        leading: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Accent bar
-            Container(
-              width: 5,
-              height: 32,
-              decoration: BoxDecoration(
-                color: accentColor.withOpacity(0.9),
-                borderRadius: BorderRadius.circular(8),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 32,
+            child: Text(
+              '$rank',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontFamily: 'Nunito',
+                fontWeight: FontWeight.w900,
+                fontSize: 16,
+                color: isCurrentUser ? AppColors.goldText : AppColors.textSecondary,
               ),
             ),
-            const SizedBox(width: 10),
-            // Rank number
-            Container(
-              width: 26,
-              height: 26,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: isCurrentUser
-                    ? AppColors.primary
-                    : accentColor.withOpacity(0.15),
-                border: Border.all(
-                    color: accentColor.withOpacity(isCurrentUser ? 0.0 : 0.6),
-                    width: 1),
-              ),
-              child: Center(
-                child: Text(
-                  rank.toString(),
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: isCurrentUser ? Colors.white : accentColor,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            // User avatar (only if provided) — no initials placeholder
-            if (user.avatarUrl != null)
-              CircleAvatar(
-                radius: 18,
-                backgroundColor: Colors.grey.shade200,
-                backgroundImage: user.avatarUrl!.startsWith('assets/')
-                    ? AssetImage(user.avatarUrl!) as ImageProvider
-                    : NetworkImage(user.avatarUrl!),
-              ),
-          ],
-        ),
-        title: UsernameWithCheckmark(
-          name: user.name,
-          isPremium: user.hasPremiumCheckmark,
-          style: AppTextStyles.bodyBold.copyWith(
-            color: AppColors.primary,
           ),
-          iconSize: 16,
-        ),
-        // Remove badges/no badges text from leaderboard
-        subtitle: null,
-        trailing: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              colors: [
-                accentColor.withOpacity(0.85),
-                AppColors.secondary.withOpacity(0.85)
+          const SizedBox(width: 8),
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: AppColors.primarySoft,
+            backgroundImage: user.avatarUrl != null
+                ? (user.avatarUrl!.startsWith('assets/')
+                    ? AssetImage(user.avatarUrl!) as ImageProvider
+                    : NetworkImage(user.avatarUrl!))
+                : null,
+            child: user.avatarUrl == null
+                ? Text(
+                    user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.primary,
+                    ),
+                  )
+                : null,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                UsernameWithCheckmark(
+                  name: isCurrentUser ? '${user.name} (You)' : user.name,
+                  isPremium: user.hasPremiumCheckmark,
+                  style: AppTextStyles.bodyBold.copyWith(
+                    color: AppColors.textPrimary,
+                  ),
+                  iconSize: 16,
+                ),
+                if (showSchool)
+                  Text(
+                    (user.schoolName != null &&
+                            user.schoolName!.trim().isNotEmpty)
+                        ? user.schoolName!.trim()
+                        : 'No school',
+                    style: AppTextStyles.caption.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
               ],
             ),
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: accentColor.withOpacity(0.25),
-                blurRadius: 8,
-                offset: const Offset(0, 3),
-              ),
-            ],
           ),
-          child: Row(
+          const SizedBox(width: 8),
+          Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.stars_rounded, color: Colors.white, size: 18),
-              const SizedBox(width: 6),
+              const Icon(Icons.bolt_rounded,
+                  size: 16, color: AppColors.primary),
+              const SizedBox(width: 2),
               Text(
                 '${user.monthlyXp} XP',
                 style: AppTextStyles.bodyBold.copyWith(
-                  color: Colors.white,
+                  color: AppColors.primary,
                 ),
               ),
             ],
           ),
-        ),
+        ],
       ),
-    )
+    );
+
+    if (!animate) return row;
+    return row
         .animate()
         .fadeIn(
           duration: 400.ms,
-          delay: (100 + (rank * 50)).ms,
+          delay: (100 + (rank.clamp(0, 12) * 40)).ms,
         )
         .slideY(
           begin: 0.2,
           duration: 400.ms,
-          delay: (100 + (rank * 50)).ms,
+          delay: (100 + (rank.clamp(0, 12) * 40)).ms,
           curve: Curves.easeOutQuad,
         );
   }

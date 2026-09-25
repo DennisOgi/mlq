@@ -7,11 +7,10 @@ import '../widgets/username_with_checkmark.dart';
 import '../screens/profile/user_profile_screen.dart';
 import '../models/models.dart';
 import '../providers/providers.dart';
-import '../theme/app_theme.dart';
 import '../utils/date_utils.dart';
 import '../widgets/child_friendly_comment_picker.dart';
 
-class PostCard extends StatelessWidget {
+class PostCard extends StatefulWidget {
   final PostModel post;
   final bool isCurrentUserPost;
   final VoidCallback? onDelete;
@@ -24,56 +23,63 @@ class PostCard extends StatelessWidget {
   });
 
   @override
+  State<PostCard> createState() => _PostCardState();
+}
+
+class _PostCardState extends State<PostCard> {
+  bool _isVoting = false;
+
+  PostModel get post => widget.post;
+  bool get isCurrentUserPost => widget.isCurrentUserPost;
+  VoidCallback? get onDelete => widget.onDelete;
+
+  Color _priorityColor() {
+    switch (post.priority) {
+      case 'critical':
+        return Colors.red;
+      case 'high':
+        return Colors.orange;
+      case 'low':
+        return Colors.grey;
+      default:
+        return AppColors.primary;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final userProvider = Provider.of<UserProvider>(context);
     final currentUserId = userProvider.user?.id ?? '';
     final isAdmin = userProvider.user?.isAdmin ?? false;
     final isLikedByCurrentUser = post.isLikedByUser(currentUserId);
+    final accentColor = post.isAdminPost
+        ? _priorityColor()
+        : post.isPoll
+            ? AppColors.secondary
+            : AppColors.secondary;
 
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
+            color: AppColors.plum.withOpacity(0.05),
             offset: const Offset(0, 4),
             blurRadius: 12,
-            spreadRadius: 0,
-          ),
-          BoxShadow(
-            color: Colors.white.withOpacity(0.9),
-            offset: const Offset(0, -2),
-            blurRadius: 8,
-            spreadRadius: 0,
           ),
         ],
         border: Border.all(
-          color: AppColors.secondary.withOpacity(0.1),
-          width: 1,
+          color: post.isPinned ? accentColor : AppColors.border,
+          width: post.isPinned ? 2 : 1,
         ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Post header with user info and gradient accent
           Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  AppColors.primary.withOpacity(0.03),
-                  AppColors.secondary.withOpacity(0.02),
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(24),
-                topRight: Radius.circular(24),
-              ),
-            ),
-            padding: const EdgeInsets.all(18),
+            padding: const EdgeInsets.fromLTRB(16, 16, 8, 0),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -95,30 +101,20 @@ class PostCard extends StatelessWidget {
                       children: [
                         // Enhanced user avatar with gradient ring
                         Container(
-                          width: 50,
-                          height: 50,
-                          decoration: BoxDecoration(
+                          width: 44,
+                          height: 44,
+                          decoration: const BoxDecoration(
                             shape: BoxShape.circle,
                             gradient: LinearGradient(
-                              colors: [
-                                AppColors.primary,
-                                AppColors.secondary,
-                              ],
+                              colors: [AppColors.plum, AppColors.primary],
                               begin: Alignment.topLeft,
                               end: Alignment.bottomRight,
                             ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: AppColors.primary.withOpacity(0.3),
-                                blurRadius: 8,
-                                offset: const Offset(0, 3),
-                              ),
-                            ],
                           ),
                           child: Container(
-                            margin: const EdgeInsets.all(3),
+                            margin: const EdgeInsets.all(2),
                             decoration: const BoxDecoration(
-                              color: AppColors.surface,
+                              color: AppColors.primarySoft,
                               shape: BoxShape.circle,
                             ),
                             child: Center(
@@ -143,18 +139,68 @@ class PostCard extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               UsernameWithCheckmark(
-                                name: post.userName,
-                                isPremium: context
-                                    .read<UserProvider>()
-                                    .isPremium(post.userId),
+                                name: post.isAdminPost || post.isPoll
+                                    ? 'MLQ Team'
+                                    : post.userName,
+                                isPremium: post.isAdminPost || post.isPoll
+                                    ? true
+                                    : context
+                                        .read<UserProvider>()
+                                        .isPremium(post.userId),
                                 style: AppTextStyles.bodyBold,
                               ),
-                              Text(
-                                AppDateUtils.getRelativeTimeString(
-                                    post.createdAt),
-                                style: AppTextStyles.caption.copyWith(
-                                  color: AppColors.textSecondary,
-                                ),
+                              Row(
+                                children: [
+                                  if (post.isPinned) ...[
+                                    Icon(Icons.push_pin,
+                                        size: 12, color: accentColor),
+                                    const SizedBox(width: 4),
+                                  ],
+                                  if (post.isAdminPost)
+                                    Container(
+                                      margin: const EdgeInsets.only(right: 6),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: _priorityColor().withOpacity(0.12),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                        'OFFICIAL',
+                                        style: AppTextStyles.caption.copyWith(
+                                          color: _priorityColor(),
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 10,
+                                        ),
+                                      ),
+                                    ),
+                                  if (post.isPoll)
+                                    Container(
+                                      margin: const EdgeInsets.only(right: 6),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: AppColors.secondary
+                                            .withOpacity(0.12),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                        'POLL',
+                                        style: AppTextStyles.caption.copyWith(
+                                          color: AppColors.secondary,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 10,
+                                        ),
+                                      ),
+                                    ),
+                                  Text(
+                                    AppDateUtils.getRelativeTimeString(
+                                        post.createdAt),
+                                    style: AppTextStyles.caption.copyWith(
+                                      color: AppColors.textSecondary,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
@@ -186,8 +232,8 @@ class PostCard extends StatelessWidget {
                   itemBuilder: (context) {
                     final List<PopupMenuEntry<String>> items = [];
                     
-                    // Owner can delete their own post
-                    if (isCurrentUserPost) {
+                    // Owner can delete their own user posts
+                    if (isCurrentUserPost && !isAdmin) {
                       items.add(
                         const PopupMenuItem<String>(
                           value: 'delete',
@@ -201,17 +247,24 @@ class PostCard extends StatelessWidget {
                         ),
                       );
                     }
-                    
-                    // Admin can delete any post
-                    if (isAdmin && !isCurrentUserPost) {
+
+                    // Admins can delete any post, announcement, or poll
+                    if (isAdmin) {
                       items.add(
-                        const PopupMenuItem<String>(
+                        PopupMenuItem<String>(
                           value: 'admin_delete',
                           child: Row(
                             children: [
-                              Icon(Icons.admin_panel_settings, color: Colors.red),
-                              SizedBox(width: 8),
-                              Text('Delete (Admin)', style: TextStyle(color: Colors.red))
+                              const Icon(Icons.delete_outline, color: Colors.red),
+                              const SizedBox(width: 8),
+                              Text(
+                                post.isPoll
+                                    ? 'Delete Poll'
+                                    : post.isAdminPost
+                                        ? 'Delete Announcement'
+                                        : 'Delete (Admin)',
+                                style: const TextStyle(color: Colors.red),
+                              ),
                             ],
                           ),
                         ),
@@ -251,138 +304,46 @@ class PostCard extends StatelessWidget {
             ),
           ),
 
-          // Post content with enhanced styling
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-            child: Text(
-              post.content,
-              style: AppTextStyles.body.copyWith(
-                height: 1.5,
-                fontSize: 15,
-                letterSpacing: 0.2,
+          if (_achievement() case final a?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: _AchievementBanner(
+                art: a.art,
+                label: a.label,
+                headline: a.headline,
               ),
             ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+            child: _buildPostBody(context),
           ),
 
           // Image rendering intentionally disabled per Victory Wall policy (text-only)
 
-          // Post interactions (likes, comments) with enhanced divider
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 18),
-            height: 1,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  Colors.transparent,
-                  AppColors.textSecondary.withOpacity(0.2),
-                  Colors.transparent,
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
+          const Divider(height: 1, indent: 16, endIndent: 16, color: AppColors.border),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                GestureDetector(
+                _ReactionPill(
+                  icon: isLikedByCurrentUser
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                  label: post.likesCount.toString(),
+                  active: isLikedByCurrentUser,
                   onTap: () async {
                     HapticFeedback.lightImpact();
                     await Provider.of<PostProvider>(context, listen: false)
                         .likePost(post.id, currentUserId);
                   },
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: isLikedByCurrentUser
-                          ? AppColors.accent1.withOpacity(0.1)
-                          : AppColors.surface,
-                      borderRadius: BorderRadius.circular(24),
-                      boxShadow: [
-                        BoxShadow(
-                            color: Colors.white.withOpacity(0.8),
-                            offset: const Offset(-2, -2),
-                            blurRadius: 6),
-                        BoxShadow(
-                            color: Colors.black.withOpacity(0.08),
-                            offset: const Offset(2, 2),
-                            blurRadius: 6),
-                      ],
-                      border: Border.all(
-                          color: isLikedByCurrentUser
-                              ? AppColors.accent1.withOpacity(0.4)
-                              : Colors.transparent,
-                          width: 1.5),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          isLikedByCurrentUser
-                              ? Icons.favorite
-                              : Icons.favorite_border,
-                          color: isLikedByCurrentUser
-                              ? AppColors.accent1
-                              : AppColors.textSecondary,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          post.likesCount.toString(),
-                          style: AppTextStyles.bodySmall.copyWith(
-                            color: isLikedByCurrentUser
-                                ? AppColors.accent1
-                                : AppColors.textSecondary,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                 ),
-                GestureDetector(
+                const SizedBox(width: 8),
+                _ReactionPill(
+                  icon: Icons.chat_bubble_outline_rounded,
+                  label: post.commentsCount == 1
+                      ? '1 comment'
+                      : '${post.commentsCount} comments',
                   onTap: () => _showCommentsBottomSheet(context),
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: AppColors.surface,
-                      borderRadius: BorderRadius.circular(24),
-                      boxShadow: [
-                        BoxShadow(
-                            color: Colors.white.withOpacity(0.8),
-                            offset: const Offset(-2, -2),
-                            blurRadius: 6),
-                        BoxShadow(
-                            color: Colors.black.withOpacity(0.08),
-                            offset: const Offset(2, 2),
-                            blurRadius: 6),
-                      ],
-                      border: Border.all(
-                        color: AppColors.primary.withOpacity(0.1),
-                        width: 1,
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.comment_outlined,
-                            color: AppColors.primary, size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          post.commentsCount.toString(),
-                          style: AppTextStyles.bodySmall.copyWith(
-                            color: AppColors.textSecondary,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                 ),
               ],
             ),
@@ -459,6 +420,228 @@ class PostCard extends StatelessWidget {
     );
   }
 
+  /// Auto-generated win posts (badge, challenge, goal, milestone) are plain
+  /// text, so they are recognised by the phrasing VictoryWallService uses.
+  ({String art, String label, String headline})? _achievement() {
+    if (post.isPoll || post.isAdminPost) return null;
+    final text = post.content;
+    final t = text.toLowerCase();
+    final quoted = RegExp("'([^']{2,80})'").firstMatch(text)?.group(1);
+    final firstName = post.userName.trim().split(' ').first;
+    const dir = 'assets/images/badges';
+
+    if (t.contains('badge') &&
+        (t.contains('unlocked') || t.contains('earned') || t.contains('mine'))) {
+      return (
+        art: '$dir/achievers_medal.png',
+        label: 'Badge unlocked',
+        headline: quoted != null
+            ? '$firstName earned the $quoted badge'
+            : '$firstName earned a new badge',
+      );
+    }
+    if (t.contains('challenge') &&
+        RegExp(r'complet|conquer|crush|master|finished').hasMatch(t)) {
+      return (
+        art: '$dir/all_time_champion.png',
+        label: 'Challenge complete',
+        headline: quoted != null
+            ? '$firstName completed $quoted'
+            : '$firstName completed a challenge',
+      );
+    }
+    if (t.contains('milestone achieved')) {
+      return (
+        art: '$dir/peak_reacher.png',
+        label: 'Milestone',
+        headline: '$firstName reached a milestone',
+      );
+    }
+    if (t.contains('goal') &&
+        quoted != null &&
+        RegExp(r'crush|complet|conquer|done|achieved|finished').hasMatch(t)) {
+      return (
+        art: '$dir/goal_voyager.png',
+        label: 'Goal complete',
+        headline: '$firstName completed $quoted',
+      );
+    }
+    return null;
+  }
+
+  Widget _buildPostBody(BuildContext context) {
+    if (post.isPoll) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            post.content,
+            style: AppTextStyles.heading3.copyWith(fontSize: 16),
+          ),
+          const SizedBox(height: 12),
+          _buildPollOptions(context),
+          if (post.isExpired)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'This poll has ended.',
+                style: AppTextStyles.caption.copyWith(color: Colors.grey),
+              ),
+            ),
+        ],
+      );
+    }
+
+    if (post.isAdminPost) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (post.title != null && post.title!.isNotEmpty)
+            Text(
+              post.title!,
+              style: AppTextStyles.heading3.copyWith(
+                color: _priorityColor(),
+                fontSize: 17,
+              ),
+            ),
+          if (post.title != null && post.title!.isNotEmpty)
+            const SizedBox(height: 8),
+          Text(
+            post.content,
+            style: AppTextStyles.body.copyWith(
+              height: 1.5,
+              fontSize: 15,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Text(
+      post.content,
+      style: AppTextStyles.body.copyWith(
+        height: 1.5,
+        fontSize: 15,
+        letterSpacing: 0.2,
+      ),
+    );
+  }
+
+  Widget _buildPollOptions(BuildContext context) {
+    final totalVotes = post.totalPollVotes;
+    final showResults = post.hasUserVoted || post.isExpired;
+
+    if (post.pollOptions.isEmpty) {
+      return Text(
+        'Loading poll options...',
+        style: AppTextStyles.caption.copyWith(color: AppColors.textSecondary),
+      );
+    }
+
+    return Column(
+      children: post.pollOptions.map((option) {
+        final fraction =
+            totalVotes > 0 ? option.voteCount / totalVotes : 0.0;
+        final percent = (fraction * 100).round();
+        final isSelected = post.userVoteOptionId == option.id;
+
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: (!showResults && !_isVoting && !post.isExpired)
+                ? () => _castVote(context, option.id)
+                : null,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isSelected
+                      ? AppColors.secondary
+                      : AppColors.textSecondary.withOpacity(0.2),
+                  width: isSelected ? 2 : 1,
+                ),
+                color: isSelected
+                    ? AppColors.secondary.withOpacity(0.08)
+                    : AppColors.surface,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          option.label,
+                          style: AppTextStyles.body.copyWith(
+                            fontWeight:
+                                isSelected ? FontWeight.bold : FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      if (showResults)
+                        Text(
+                          '$percent%',
+                          style: AppTextStyles.caption.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.secondary,
+                          ),
+                        ),
+                    ],
+                  ),
+                  if (showResults) ...[
+                    const SizedBox(height: 6),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: totalVotes > 0 ? fraction : 0,
+                        minHeight: 6,
+                        backgroundColor:
+                            AppColors.textSecondary.withOpacity(0.12),
+                        color: AppColors.secondary,
+                      ),
+                    ),
+                    Text(
+                      '${option.voteCount} vote${option.voteCount == 1 ? '' : 's'}',
+                      style: AppTextStyles.caption.copyWith(
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Future<void> _castVote(BuildContext context, String optionId) async {
+    setState(() => _isVoting = true);
+    final result = await context.read<PostProvider>().voteOnPoll(
+          postId: post.id,
+          optionId: optionId,
+        );
+    if (!mounted) return;
+    setState(() => _isVoting = false);
+
+    final message = result['message'] as String?;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result['success'] == true
+              ? 'Vote recorded! Thanks for participating.'
+              : (message ?? 'Could not submit vote.'),
+        ),
+        backgroundColor:
+            result['success'] == true ? AppColors.secondary : Colors.red,
+      ),
+    );
+  }
+
   void _confirmMute(BuildContext context) async {
     final confirmed = await showDialog<bool>(
           context: context,
@@ -505,9 +688,13 @@ class PostCard extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Are you sure you want to delete this post?',
-                  style: TextStyle(fontWeight: FontWeight.bold),
+                Text(
+                  post.isPoll
+                      ? 'Delete this poll and all votes?'
+                      : post.isAdminPost
+                          ? 'Delete this announcement?'
+                          : 'Are you sure you want to delete this post?',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 12),
                 Text(
@@ -522,16 +709,18 @@ class PostCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    post.content.length > 100
-                        ? '${post.content.substring(0, 100)}...'
-                        : post.content,
+                    (post.title ?? post.content).length > 100
+                        ? '${(post.title ?? post.content).substring(0, 100)}...'
+                        : (post.title ?? post.content),
                     style: const TextStyle(fontSize: 13),
                   ),
                 ),
                 const SizedBox(height: 12),
-                const Text(
-                  'This action cannot be undone.',
-                  style: TextStyle(color: Colors.red, fontSize: 12),
+                Text(
+                  post.isPoll
+                      ? 'This cannot be undone and all votes will be removed.'
+                      : 'This action cannot be undone.',
+                  style: const TextStyle(color: Colors.red, fontSize: 12),
                 ),
               ],
             ),
@@ -736,6 +925,125 @@ class PostCard extends StatelessWidget {
                   AppDateUtils.getRelativeTimeString(comment.createdAt),
                   style: AppTextStyles.caption.copyWith(
                     color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReactionPill extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+
+  const _ReactionPill({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.active = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = active ? AppColors.primary : AppColors.textSecondary;
+    return Material(
+      color: active ? AppColors.primarySoft : Colors.transparent,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 18, color: fg),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: AppTextStyles.bodySmall.copyWith(
+                  color: fg,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AchievementBanner extends StatelessWidget {
+  final String art;
+  final String label;
+  final String headline;
+
+  const _AchievementBanner({
+    required this.art,
+    required this.label,
+    required this.headline,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [AppColors.plum, AppColors.primary],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 60,
+            height: 60,
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Image.asset(
+              art,
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) => const Icon(
+                Icons.emoji_events_rounded,
+                color: AppColors.secondary,
+                size: 32,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label.toUpperCase(),
+                  style: AppTextStyles.caption.copyWith(
+                    color: AppColors.secondary,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  headline,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTextStyles.bodyBold.copyWith(
+                    color: Colors.white,
+                    height: 1.25,
                   ),
                 ),
               ],

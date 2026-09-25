@@ -168,11 +168,9 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
               // Badge image
               Opacity(
                 opacity: isUnlocked ? 1.0 : 0.3,
-                child: Image.asset(
-                  badge.imageAsset,
-                  height: 80,
-                  width: 80,
-                  fit: BoxFit.contain,
+                child: BadgeImage(
+                  badge: badge,
+                  size: 80,
                 ).animate(
                   onPlay: isUnlocked 
                       ? (controller) => controller.repeat(reverse: true) 
@@ -237,10 +235,9 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
                 // Badge image
                 Opacity(
                   opacity: isUnlocked ? 1.0 : 0.3,
-                  child: Image.asset(
-                    tempBadge.imageAsset,
-                    height: 120,
-                    width: 120,
+                  child: BadgeImage(
+                    badge: tempBadge,
+                    size: 120,
                   ).animate(
                     onPlay: isUnlocked 
                         ? (controller) => controller.repeat(reverse: true) 

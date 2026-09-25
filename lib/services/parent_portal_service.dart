@@ -27,11 +27,13 @@ class ParentPortalService {
 
       debugPrint('ParentPortal: Looking for children with parent_email = $email');
       
+      final normalizedEmail = email.toLowerCase().trim();
+
       // Find all profiles where parent_email matches current user's email
       final children = await _supabase
           .from('profiles')
           .select('id, name, avatar_url, xp, monthly_xp, coins, badges, interests, created_at')
-          .eq('parent_email', email.toLowerCase().trim());
+          .ilike('parent_email', normalizedEmail);
       
       debugPrint('ParentPortal: Found ${(children as List).length} children');
       
@@ -51,12 +53,12 @@ class ParentPortalService {
         return {'error': 'Not authenticated'};
       }
 
-      // Check if this child belongs to the current parent
+      // Match case-insensitively (same rule as getMyChildren).
       final childProfile = await _supabase
           .from('profiles')
           .select('*')
           .eq('id', childId)
-          .eq('parent_email', email.toLowerCase().trim())
+          .ilike('parent_email', email.toLowerCase().trim())
           .maybeSingle();
       
       if (childProfile == null) {
@@ -110,7 +112,20 @@ class ParentPortalService {
           .eq('user_id', childId)
           .gte('created_at', thirtyDaysAgo.toIso8601String())
           .order('created_at', ascending: false);
-      
+
+      // Badge count from the canonical user_badges table (NOT the legacy
+      // profiles.badges array, which is no longer written by the award flow).
+      int badgesCount = 0;
+      try {
+        final earnedBadges = await _supabase
+            .from('user_badges')
+            .select('id')
+            .eq('user_id', childId);
+        badgesCount = (earnedBadges as List).length;
+      } catch (_) {
+        badgesCount = (childProfile['badges'] as List?)?.length ?? 0;
+      }
+
       // Calculate statistics
       final mainGoalsList = List<Map<String, dynamic>>.from(mainGoals);
       final dailyGoalsList = List<Map<String, dynamic>>.from(dailyGoals);
@@ -143,7 +158,7 @@ class ParentPortalService {
           'total_xp': childProfile['xp'] ?? 0,
           'monthly_xp': childProfile['monthly_xp'] ?? 0,
           'coins': childProfile['coins'] ?? 0,
-          'badges_count': (childProfile['badges'] as List?)?.length ?? 0,
+          'badges_count': badgesCount,
           'main_goals_total': mainGoalsList.length,
           'main_goals_completed': completedMainGoals,
           'daily_goals_total': dailyGoalsList.length,
@@ -245,5 +260,62 @@ class ParentPortalService {
     }
     
     return activity;
+  }
+
+  /// Pending LeadWallet activation requests for linked children.
+  Future<List<Map<String, dynamic>>> getPendingWalletActivations() async {
+    try {
+      final result = await _supabase.rpc('get_parent_pending_wallet_consents');
+      if (result == null) {
+        debugPrint('ParentPortal: wallet RPC returned null');
+        return [];
+      }
+
+      final map = result is Map
+          ? Map<String, dynamic>.from(result)
+          : Map<String, dynamic>.from(result as Map<dynamic, dynamic>);
+
+      if (map['success'] != true) {
+        debugPrint('ParentPortal: wallet RPC unsuccessful: $map');
+        return [];
+      }
+
+      final requests = map['requests'];
+      if (requests == null) return [];
+      if (requests is List) {
+        return List<Map<String, dynamic>>.from(
+          requests.map((r) => Map<String, dynamic>.from(r as Map)),
+        );
+      }
+      debugPrint('ParentPortal: unexpected wallet requests type: ${requests.runtimeType}');
+      return [];
+    } catch (e) {
+      debugPrint('Error fetching pending wallet activations: $e');
+      return [];
+    }
+  }
+
+  Future<Map<String, dynamic>> approveWalletActivation(String studentId) async {
+    try {
+      final result = await _supabase.rpc('parent_approve_wallet_consent', params: {
+        'p_student_id': studentId,
+      });
+      return Map<String, dynamic>.from(result as Map);
+    } catch (e) {
+      debugPrint('Error approving wallet activation: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> rejectWalletActivation(String studentId) async {
+    try {
+      final result = await _supabase.rpc('parent_reject_wallet_consent', params: {
+        'p_student_id': studentId,
+      });
+      return Map<String, dynamic>.from(result as Map);
+    } catch (e) {
+      debugPrint('Error rejecting wallet activation: $e');
+      return {'success': false, 'error': e.toString()};
+    }
   }
 }

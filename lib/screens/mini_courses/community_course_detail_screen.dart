@@ -6,7 +6,9 @@ import '../../constants/app_constants.dart';
 import '../../providers/mini_course_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../services/community_course_service.dart';
+import '../../models/mini_course_model.dart';
 import '../../widgets/widgets.dart';
+import '../../utils/entitlements.dart';
 
 /// Detail screen for viewing and completing a community mini course
 class CommunityCourseDetailScreen extends StatefulWidget {
@@ -63,6 +65,25 @@ class _CommunityCourseDetailScreenState
             ),
             body: const Center(
               child: Text('This course is no longer available.'),
+            ),
+          );
+        }
+
+        final user = context.watch<UserProvider>().user;
+        if (!Entitlements.canUseMiniCourses(user)) {
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text('Mini-Course'),
+              backgroundColor: AppColors.primary,
+            ),
+            body: const Padding(
+              padding: EdgeInsets.all(24),
+              child: FeatureLockCard(
+                title: 'Mini-Courses',
+                description:
+                    'Free accounts include mini-courses for 7 days. Subscribe to keep community lessons.',
+                icon: Icons.school_rounded,
+              ),
             ),
           );
         }
@@ -517,6 +538,22 @@ class _CommunityCourseDetailScreenState
           if (!passed) ...[
             const SizedBox(height: 12),
             QuestButton(
+              text: 'Try again',
+              icon: Icons.refresh,
+              type: QuestButtonType.primary,
+              isFullWidth: true,
+              onPressed: () {
+                setState(() {
+                  _showQuiz = true;
+                  _quizSubmitted = false;
+                  _currentQuestionIndex = 0;
+                  _selectedAnswers =
+                      List<int?>.filled(course.quizQuestions.length, null);
+                });
+              },
+            ).animate().fadeIn(delay: 550.ms),
+            const SizedBox(height: 12),
+            QuestButton(
               text: 'Review Content',
               icon: Icons.menu_book,
               type: QuestButtonType.secondary,
@@ -703,7 +740,10 @@ class _CommunityCourseDetailScreenState
       int correct = 0;
       for (int i = 0; i < course.quizQuestions.length; i++) {
         final question = course.quizQuestions[i];
-        final correctIndex = question['correct_index'] as int? ?? 0;
+        final correctIndex = parseQuizCorrectAnswerIndex(
+          Map<String, dynamic>.from(question),
+          List<String>.from(question['options'] ?? []),
+        );
         if (_selectedAnswers[i] == correctIndex) {
           correct++;
         }

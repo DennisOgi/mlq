@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/badge_model.dart';
 import '../models/user_model.dart';
-import '../models/mini_course_model.dart';
 import '../providers/user_provider.dart';
 import '../providers/gratitude_provider.dart';
 import '../providers/goal_provider.dart';
@@ -10,8 +9,6 @@ import '../providers/challenge_provider.dart';
 import '../providers/mini_course_provider.dart';
 import './supabase_service.dart';
 import './badge_seen_store.dart';
-
-// Uses MiniCourseStatus from models/mini_course_model.dart
 
 // Extension methods to handle missing properties in models
 extension UserModelExtension on UserModel {
@@ -51,152 +48,53 @@ class BadgeService {
     this.gratitudeProvider = gratitudeProvider;
   }
 
-  // Check for all possible badge achievements
+  // Check for all possible badge achievements.
+  // Awards are server-only via run_my_badge_checks (client INSERT revoked).
   Future<List<BadgeModel>> checkForAchievements() async {
-    if (userProvider == null ||
-        goalProvider == null ||
-        challengeProvider == null ||
-        miniCourseProvider == null) {
-      debugPrint(
-          'BadgeService not initialized properly: userProvider=${userProvider != null}, goalProvider=${goalProvider != null}, challengeProvider=${challengeProvider != null}, miniCourseProvider=${miniCourseProvider != null}');
+    if (userProvider == null) {
+      debugPrint('BadgeService not initialized: userProvider is null');
       return [];
     }
 
-    // ONLY return NEWLY EARNED badges for popup display
-    final List<BadgeModel> newlyEarnedBadges = [];
+    final beforeIds =
+        userProvider!.badges.map((b) => b.id).whereType<String>().toSet();
+    final hydratingSession = beforeIds.isEmpty;
 
-    // LEGACY BADGES: evaluate and persist via saveBadgeToDatabase
-    final List<BadgeModel> legacyNew = [];
-    legacyNew.addAll(await _checkGoalNinjaBadge());
-    legacyNew.addAll(await _checkChallengeChampionBadge());
-    legacyNew.addAll(await _checkStreakMasterBadge());
-    legacyNew.addAll(await _checkKnowledgeSeekerBadge());
-    legacyNew.addAll(await _checkHealthyHabitHeroBadge());
-    legacyNew.addAll(await _checkSocialButterflyBadge());
-    legacyNew.addAll(await _checkAcademicAceBadge());
-    legacyNew.addAll(await _checkQuestorFriendBadge());
-    legacyNew.addAll(await _checkVictoryVeteranBadge());
-
-    for (final b in legacyNew) {
-      final saved = await saveBadgeToDatabase(b);
-      if (saved) {
-        // Badge was newly saved (not already in database)
-        userProvider!.addBadge(b);
-        newlyEarnedBadges.add(b); // Only add to popup list if newly saved
-      } else {
-        debugPrint(
-            '⚠️ Badge ${b.name} already earned or save failed - not showing popup');
-      }
+    try {
+      final result = await _client.rpc('run_my_badge_checks');
+      debugPrint('🏆 run_my_badge_checks: $result');
+    } catch (e) {
+      debugPrint('❌ run_my_badge_checks failed: $e');
     }
 
-    // NEW FRAMEWORK BADGES: evaluators already insert + reward; return for UI only
-    final List<BadgeModel> frameworkNew = [];
-    frameworkNew.addAll(await _checkGratitudeStreakMilestones());
-    frameworkNew.addAll(await _checkGoalsCompletedMilestones());
-    frameworkNew.addAll(await _checkMiniCoursesCompletedMilestones());
-
-    // Add to provider for UI count (these are also checked for duplicates in their evaluators)
-    for (final b in frameworkNew) {
-      userProvider!.addBadge(b);
-      newlyEarnedBadges
-          .add(b); // Framework badges are already filtered for new ones
+    try {
+      await userProvider!.loadUserBadges();
+    } catch (e) {
+      debugPrint('Badge reload failed: $e');
     }
 
-    // Return ONLY newly earned badges for popups
+    // Fresh browser / first login this session: existing awards are not new.
+    if (hydratingSession) {
+      debugPrint(
+        '🏆 Skipping badge popups after hydrate '
+        '(${userProvider!.badges.length} existing)',
+      );
+      return [];
+    }
+
+    final newlyEarnedBadges = userProvider!.badges
+        .where((b) => b.id != null && !beforeIds.contains(b.id))
+        .toList();
+
     debugPrint('🏆 Newly earned badges for popup: ${newlyEarnedBadges.length}');
     return newlyEarnedBadges;
   }
 
-  // Save badge to Supabase database and award XP + coins
+  // Legacy helper — awards are server-side now. Returns false (no client insert).
   Future<bool> saveBadgeToDatabase(BadgeModel badge) async {
-    try {
-      debugPrint('🏆 Attempting to save badge: ${badge.name}');
-
-      // Add null check for userProvider
-      if (userProvider == null) {
-        debugPrint(
-            '❌ BadgeService: userProvider is null in saveBadgeToDatabase');
-        return false;
-      }
-
-      final userId = userProvider!.user?.id;
-      if (userId == null) {
-        debugPrint('❌ BadgeService: user ID is null');
-        return false;
-      }
-
-      debugPrint('🏆 User ID: $userId');
-
-      // Find the badge definition by name (ensure 'badges' table contains matching names)
-      debugPrint('🏆 Looking for badge definition: ${badge.name}');
-      final badgeDef = await _client
-          .from('badges')
-          .select()
-          .eq('name', badge.name)
-          .maybeSingle();
-
-      if (badgeDef == null) {
-        debugPrint(
-            '❌ BadgeService: Badge definition not found for ${badge.name}');
-        return false;
-      }
-
-      debugPrint('✅ Badge definition found: ${badgeDef['id']}');
-
-      // Check if user already has this badge
-      debugPrint('🏆 Checking if badge already awarded...');
-      final existingBadge = await _client
-          .from('user_badges')
-          .select()
-          .eq('user_id', userId)
-          .eq('badge_id', badgeDef['id'])
-          .maybeSingle();
-
-      if (existingBadge != null) {
-        debugPrint('⚠️ BadgeService: User already has badge ${badge.name}');
-        return false;
-      }
-
-      debugPrint('✅ Badge not yet awarded, proceeding...');
-
-      // Award the badge (idempotent: we already checked existing above)
-      debugPrint('🏆 Inserting badge into user_badges...');
-      await _client.from('user_badges').insert({
-        'user_id': userId,
-        'badge_id': badgeDef['id'],
-        'earned_at': DateTime.now().toIso8601String(),
-      });
-
-      debugPrint('✅ Badge inserted successfully!');
-
-      // Badge XP disabled as requested.
-
-
-      // Award coins for earning the badge (new behavior)
-      final coinReward = (badgeDef['coin_reward'] as num?)?.toDouble() ?? 0.0;
-      if (coinReward > 0) {
-        // Credit on server (profiles + coin_transactions) with clear metadata
-        await SupabaseService().addCoins(
-          coinReward,
-          description: 'Badge reward: ${badge.name}',
-          transactionType: 'badge_reward',
-          referenceType: 'badge',
-          referenceId: badgeDef['id']?.toString(),
-        );
-        // Also nudge local state if userProvider is available
-        try {
-          await userProvider?.addCoins(coinReward);
-        } catch (_) {}
-      }
-
-      debugPrint(
-          '🎉 BadgeService: Successfully awarded badge ${badge.name} with ${coinReward.toStringAsFixed(1)} coins');
-      return true;
-    } catch (e) {
-      debugPrint('❌ Error saving badge to database: $e');
-      debugPrint('❌ Stack trace: ${StackTrace.current}');
-      return false;
-    }
+    debugPrint(
+        '⚠️ saveBadgeToDatabase is deprecated; awards go through run_my_badge_checks');
+    return false;
   }
 
   // Check if user has completed 5 main goals
@@ -339,26 +237,26 @@ class BadgeService {
       {'count': 1000, 'name': 'Infinite Dreamer'},
     ];
 
-    // OPTIMIZATION: Only check the milestone closest to current count
-    // This prevents awarding multiple badges at once
     final userId = userProvider?.user?.id;
     if (userId == null) return earned;
 
-    for (final m in milestones.reversed) {
+    // Award EVERY unearned milestone the user qualifies for (ascending), not
+    // just the highest. This fixes retroactive catch-up where a user with many
+    // completions previously only received the top tier and skipped the rest.
+    for (final m in milestones) {
       final int c = m['count'];
       final String badgeName = m['name'];
 
-      final hasBadge = await _hasUserBadge(userId, badgeName);
+      // Milestones are ascending; once the count falls short, nothing higher qualifies.
+      if (completed < c) break;
 
-      if (completed >= c && !hasBadge) {
-        // Award this badge and stop checking lower milestones
+      final hasBadge = await _hasUserBadge(userId, badgeName);
+      if (!hasBadge) {
         final display = await _awardByName(badgeName,
             fallbackType: BadgeType.goalNinja,
             description: 'Completed $c goals');
         if (display != null) {
           earned.add(display);
-          // Only award ONE milestone badge per check to prevent spam
-          break;
         }
       }
     }
@@ -376,7 +274,8 @@ class BadgeService {
           .from('user_course_progress')
           .select('id')
           .eq('user_id', uid)
-          .eq('completed', true);
+          .eq('completed', true)
+          .gte('score', 70);
       final completedCourses = (rows as List).length;
 
       final List<Map<String, dynamic>> milestones = [
@@ -392,21 +291,21 @@ class BadgeService {
         {'count': 1000, 'name': 'Eternal Master'},
       ];
 
-      // OPTIMIZATION: Only award highest unearned milestone to prevent spam
-      for (final m in milestones.reversed) {
+      // Award EVERY unearned mini-course milestone the user qualifies for.
+      for (final m in milestones) {
         final int c = m['count'];
         final String badgeName = m['name'];
 
-        final hasBadge = await _hasUserBadge(uid, badgeName);
+        // Ascending list: stop once the count no longer qualifies.
+        if (completedCourses < c) break;
 
-        if (completedCourses >= c && !hasBadge) {
+        final hasBadge = await _hasUserBadge(uid, badgeName);
+        if (!hasBadge) {
           final display = await _awardByName(badgeName,
               fallbackType: BadgeType.knowledgeSeeker,
               description: 'Completed $c mini-courses');
           if (display != null) {
             earned.add(display);
-            // Only award ONE milestone badge per check
-            break;
           }
         }
       }
@@ -421,51 +320,20 @@ class BadgeService {
   Future<BadgeModel?> _awardByName(String name,
       {required BadgeType fallbackType, String? description}) async {
     try {
-      Map<String, dynamic>? def =
-          await _client.from('badges').select().eq('name', name).maybeSingle();
-      if (def == null) {
-        // In production, badge definitions must be provisioned by backend/admin.
-        // The client no longer attempts to INSERT into badges to avoid RLS errors.
-        debugPrint(
-            'BadgeService: definition missing for "$name"; ensure it exists in badges table.');
-        return null;
-      }
+      // Client inserts revoked — awards happen in run_my_badge_checks.
       final userId = userProvider?.user?.id;
       if (userId == null) return null;
-      final existing = await _client
-          .from('user_badges')
-          .select('id')
-          .eq('user_id', userId)
-          .eq('badge_id', def['id'])
-          .maybeSingle();
-      if (existing != null) return null;
+      final already = await _hasUserBadge(userId, name);
+      if (!already) return null;
 
-      await _client.from('user_badges').insert({
-        'user_id': userId,
-        'badge_id': def['id'],
-        'earned_at': DateTime.now().toIso8601String(),
-      });
-
-      final coins = (def['coin_reward'] as num?)?.toDouble() ?? 0.0;
-      if (coins > 0) {
-        await SupabaseService().addCoins(
-          coins,
-          description: 'Badge reward: $name',
-          transactionType: 'badge_reward',
-          referenceType: 'badge',
-          referenceId: def['id']?.toString(),
-        );
-        try {
-          await userProvider?.addCoins(coins);
-        } catch (_) {}
-      }
-
+      final def =
+          await _client.from('badges').select().eq('name', name).maybeSingle();
       return BadgeModel(
-        id: def['id'].toString(),
+        id: def?['id']?.toString() ?? name,
         userId: userId,
         type: fallbackType,
         earnedDate: DateTime.now(),
-        description: description ?? def['description'],
+        description: description ?? def?['description'],
       );
     } catch (e) {
       debugPrint('BadgeService: _awardByName failed for "$name": $e');
@@ -602,38 +470,6 @@ class BadgeService {
       }
     }
     return streak;
-  }
-
-  // Check if user has completed 3 mini-courses
-  Future<List<BadgeModel>> _checkKnowledgeSeekerBadge() async {
-    // Add null check for miniCourseProvider
-    if (miniCourseProvider?.courses == null) {
-      debugPrint('BadgeService: miniCourseProvider or courses is null');
-      return [];
-    }
-
-    final completedCourses = miniCourseProvider!.courses
-        .where((course) => course.status == MiniCourseStatus.completed)
-        .length;
-
-    // Check database for existing badge
-    final userId = userProvider?.user?.id;
-    if (userId == null) return [];
-
-    final hasKnowledgeBadge = await _hasUserBadge(userId, 'Knowledge Seeker');
-
-    if (completedCourses >= 3 && !hasKnowledgeBadge) {
-      return [
-        BadgeModel(
-          id: 'knowledge_seeker_${DateTime.now().millisecondsSinceEpoch}',
-          userId: userProvider?.user?.id ?? 'unknown_user',
-          type: BadgeType.knowledgeSeeker,
-          earnedDate: DateTime.now(),
-          description: 'Completed 3 mini-courses',
-        )
-      ];
-    }
-    return [];
   }
 
   // Check if user has completed 10 health goals
@@ -877,10 +713,9 @@ class BadgeService {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Image.asset(
-                badge.imageAsset,
-                height: 100,
-                width: 100,
+              BadgeImage(
+                badge: badge,
+                size: 100,
               ),
               const SizedBox(height: 16),
               Text(

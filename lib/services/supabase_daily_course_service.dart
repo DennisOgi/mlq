@@ -237,14 +237,15 @@ class SupabaseDailyCourseService {
           .entries
           .map((entry) {
             final index = entry.key;
-            final q = entry.value;
+            final q = entry.value as Map<String, dynamic>;
+            final options = (q['options'] as List<dynamic>? ?? [])
+                .map((e) => e.toString())
+                .toList();
             return MiniCourseQuizQuestionModel(
               id: q['id'] as String? ?? '${courseId}_quiz_q$index',
               text: q['question'] as String? ?? q['text'] as String? ?? '',
-              options: (q['options'] as List<dynamic>? ?? [])
-                  .map((e) => e.toString())
-                  .toList(),
-              correctAnswerIndex: q['correctAnswerIndex'] as int? ?? 0,
+              options: options,
+              correctAnswerIndex: parseQuizCorrectAnswerIndex(q, options),
               selectedOptionIndex: q['selectedOptionIndex'] as int?,
             );
           })

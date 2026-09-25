@@ -7,6 +7,8 @@ import '../models/models.dart';
 import '../providers/providers.dart';
 
 import '../theme/app_theme.dart';
+import '../utils/course_visuals.dart';
+import 'mlq_ui_primitives.dart';
 import 'quest_progress_indicator.dart';
 
 class GoalCard extends StatelessWidget {
@@ -280,6 +282,20 @@ class GoalCard extends StatelessWidget {
       return;
     }
 
+    final todaysGoals = goalProvider.getDailyGoalsForDate(DateTime.now());
+    if (todaysGoals.length >= 3) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'You can only set 3 daily goals per day. Delete an existing goal to add another.',
+            style: AppTextStyles.body.copyWith(color: Colors.white),
+          ),
+          backgroundColor: AppColors.secondary,
+        ),
+      );
+      return;
+    }
+
     // Show dialog to add daily goal
     showDialog(
       context: context,
@@ -309,7 +325,7 @@ class GoalCard extends StatelessWidget {
                   onPressed: isSubmitting
                       ? null
                       : () async {
-                          if (dailyGoalTitle.isEmpty) {
+                          if (dailyGoalTitle.trim().isEmpty) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text(
@@ -326,7 +342,7 @@ class GoalCard extends StatelessWidget {
                           final dailyGoal = DailyGoalModel.createDailyGoal(
                             userId: userProvider.user!.id,
                             mainGoalId: goal.id,
-                            title: dailyGoalTitle,
+                            title: dailyGoalTitle.trim(),
                           );
 
                           setState(() => isSubmitting = true);
@@ -336,7 +352,6 @@ class GoalCard extends StatelessWidget {
 
                           switch (status) {
                             case AddDailyGoalStatus.createdOnline:
-                              userProvider.addCoins(0.5);
                               if (context.mounted) {
                                 Navigator.pop(context);
                                 ScaffoldMessenger.of(context).showSnackBar(
@@ -371,7 +386,8 @@ class GoalCard extends StatelessWidget {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text(
-                                      'Daily goal limit reached (3/3).',
+                                      goalProvider.lastDailyGoalError ??
+                                          'You can only set 3 daily goals per day.',
                                       style: AppTextStyles.body
                                           .copyWith(color: Colors.white),
                                     ),
@@ -380,12 +396,29 @@ class GoalCard extends StatelessWidget {
                                 );
                               }
                               break;
+                            case AddDailyGoalStatus.cloned:
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      goalProvider.lastDailyGoalError ??
+                                          'You already used that same daily goal under a different main goal today.',
+                                      style: AppTextStyles.body
+                                          .copyWith(color: Colors.white),
+                                    ),
+                                    backgroundColor: AppColors.error,
+                                  ),
+                                );
+                              }
+                              break;
+                            case AddDailyGoalStatus.unrelated:
                             case AddDailyGoalStatus.failed:
                               if (context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text(
-                                      'Failed to add daily goal. Please try again.',
+                                      goalProvider.lastDailyGoalError ??
+                                          'Failed to add daily goal. Please try again.',
                                       style: AppTextStyles.body
                                           .copyWith(color: Colors.white),
                                     ),

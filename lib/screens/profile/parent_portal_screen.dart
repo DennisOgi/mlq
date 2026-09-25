@@ -24,6 +24,7 @@ class _ParentPortalScreenState extends State<ParentPortalScreen> {
   
   bool _isLoading = true;
   List<Map<String, dynamic>> _children = [];
+  List<Map<String, dynamic>> _pendingWalletRequests = [];
   String? _selectedChildId;
   Map<String, dynamic>? _childAnalytics;
 
@@ -171,19 +172,25 @@ class _ParentPortalScreenState extends State<ParentPortalScreen> {
     });
 
     try {
-      final children = await _parentService.getMyChildren();
-      
+      final results = await Future.wait([
+        _parentService.getMyChildren(),
+        _parentService.getPendingWalletActivations(),
+      ]);
+      final children = results[0] as List<Map<String, dynamic>>;
+      final pendingWallet = results[1] as List<Map<String, dynamic>>;
+
       setState(() {
         _children = children;
+        _pendingWalletRequests = pendingWallet;
         _isLoading = false;
-        
+
         if (children.isNotEmpty && _selectedChildId == null) {
           _selectedChildId = children.first['id'];
           _loadChildAnalytics();
         }
       });
     } catch (e) {
-      debugPrint('Error loading children: $e');
+      debugPrint('Error loading parent portal data: $e');
       setState(() {
         _isLoading = false;
       });
@@ -225,17 +232,25 @@ class _ParentPortalScreenState extends State<ParentPortalScreen> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _children.isEmpty
-              ? _buildNoChildrenView(currentUser?.email)
-              : _buildDashboard(),
+          : RefreshIndicator(
+              onRefresh: _loadChildren,
+              child: _children.isEmpty
+                  ? _buildNoChildrenView(currentUser?.email)
+                  : _buildDashboard(),
+            ),
     );
   }
 
   Widget _buildNoChildrenView(String? parentEmail) {
     return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(24),
       child: Column(
         children: [
+          if (_pendingWalletRequests.isNotEmpty) ...[
+            _buildPendingWalletSection(),
+            const SizedBox(height: 16),
+          ],
           // Header
           Container(
             padding: const EdgeInsets.all(24),
@@ -429,6 +444,7 @@ class _ParentPortalScreenState extends State<ParentPortalScreen> {
   Widget _buildDashboard() {
     return Column(
       children: [
+        if (_pendingWalletRequests.isNotEmpty) _buildPendingWalletSection(),
         // Child selector
         if (_children.length > 1) _buildChildSelector(),
         
@@ -440,6 +456,133 @@ class _ParentPortalScreenState extends State<ParentPortalScreen> {
         ),
       ],
     );
+  }
+
+  Widget _buildPendingWalletSection() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFFFB800).withOpacity(0.4)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.account_balance_wallet_rounded, color: Color(0xFFFFB800)),
+              const SizedBox(width: 8),
+              Text(
+                'LeadWallet approvals',
+                style: AppTextStyles.subtitle.copyWith(fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Your child requested to activate LeadWallet for cash rewards.',
+            style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+          ),
+          const SizedBox(height: 12),
+          ..._pendingWalletRequests.map((req) {
+            final studentId = req['student_id']?.toString() ?? '';
+            final name = req['student_name']?.toString() ?? 'Child';
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF8E7),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                        if ((req['school_name']?.toString() ?? '').isNotEmpty)
+                          Text(
+                            req['school_name'].toString(),
+                            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                          ),
+                      ],
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => _rejectWallet(studentId, name),
+                    child: const Text('Decline', style: TextStyle(color: Colors.red)),
+                  ),
+                  const SizedBox(width: 4),
+                  ElevatedButton(
+                    onPressed: () => _approveWallet(studentId, name),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.success,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('Approve'),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _approveWallet(String studentId, String name) async {
+    final result = await _parentService.approveWalletActivation(studentId);
+    if (!mounted) return;
+    if (result['success'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('LeadWallet approved for $name'), backgroundColor: Colors.green),
+      );
+      await _loadChildren();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result['error']?.toString() ?? 'Approval failed'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _rejectWallet(String studentId, String name) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Decline LeadWallet?'),
+        content: Text('Decline LeadWallet activation for $name?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Decline', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final result = await _parentService.rejectWalletActivation(studentId);
+    if (!mounted) return;
+    if (result['success'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('LeadWallet declined for $name')),
+      );
+      await _loadChildren();
+    }
   }
 
   Widget _buildChildSelector() {

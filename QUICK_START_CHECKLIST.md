@@ -23,7 +23,20 @@ TEST: FLWSECK-TEST-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-X
 LIVE: FLWSECK-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-X
 ```
 
-### Step 2: Create Webhook
+### Step 2: Whitelist IPs for API payouts (required for withdrawals)
+
+Flutterwave **requires IP whitelisting** before the Transfer API will work. Supabase Edge Functions use **dynamic outbound IPs**, so you must allow them in Flutterwave:
+
+- [ ] In Flutterwave Dashboard go to **Settings** → **Whitelisted IP addresses**
+- [ ] Click **Add IP Address**
+- [ ] For **sandbox/testing**, add `0.0.0.0` (allows all IPs — Flutterwave docs recommend this for dev only)
+- [ ] Complete verification with the OTP sent to your email/WhatsApp
+- [ ] Go to **Settings** → **Business preference** → **Security** tab
+- [ ] Scroll to **Transfer preferences** and select **API only** or **API + Dashboard** (not Dashboard-only)
+
+Without this step, admin **Approve & Pay Out** will fail with: `Please enable IP Whitelisting to access this service`.
+
+### Step 3: Create Webhook
 
 - [ ] In Flutterwave Dashboard, go to **Settings** → **Webhooks**
 - [ ] Click **"Add Webhook"**

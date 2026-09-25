@@ -187,22 +187,36 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
         throw Exception('User not authenticated');
       }
 
+      final normalizedParentEmail = _parentEmailController.text.trim().isEmpty
+          ? null
+          : _parentEmailController.text.trim().toLowerCase();
+
       // Update profile information
       await SupabaseService.instance.client.from('profiles').update({
         'name': _nameController.text.trim(),
         'age': int.tryParse(_ageController.text.trim()),
-        'parent_email': _parentEmailController.text.trim().isEmpty 
-            ? null 
-            : _parentEmailController.text.trim(),
+        'parent_email': normalizedParentEmail,
         'updated_at': DateTime.now().toIso8601String(),
       }).eq('id', userId);
 
-      // Trigger user provider to reload data
-      await userProvider.reinitializeUser();
+      // Update local user only — full reinitializeUser() can remount splash
+      // via MaterialApp home rebuilds and cause a splash loop.
+      final current = userProvider.user;
+      if (current != null) {
+        userProvider.updateUser(
+          current.copyWith(
+            name: _nameController.text.trim(),
+            age: int.tryParse(_ageController.text.trim()) ?? current.age,
+            parentEmail: normalizedParentEmail,
+          ),
+        );
+      }
 
       setState(() {
         _isSuccess = true;
-        _message = 'Profile updated successfully!';
+        _message = normalizedParentEmail == null
+            ? 'Profile updated successfully!'
+            : 'Profile updated! Your parent should open Parent Portal → Refresh while logged in with $normalizedParentEmail.';
       });
 
       // Show success and go back

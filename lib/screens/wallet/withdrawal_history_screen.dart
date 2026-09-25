@@ -358,8 +358,9 @@ class _WithdrawalHistoryScreenState extends State<WithdrawalHistoryScreen> {
   Map<String, dynamic> _getStatusConfig(String status) {
     switch (status) {
       case 'pending_parent_approval':
+        // Legacy status — new withdrawals use pending_admin_approval only.
         return {
-          'label': 'Awaiting Parent',
+          'label': 'Awaiting Review',
           'color': const Color(0xFFFFB800),
           'icon': Icons.hourglass_top_rounded,
         };

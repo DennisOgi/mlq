@@ -168,8 +168,6 @@ class VictoryWallService {
         return 'Challenge Champion';
       case BadgeType.streakMaster:
         return 'Streak Master';
-      case BadgeType.helpfulHero:
-        return 'Helpful Hero';
       case BadgeType.knowledgeSeeker:
         return 'Knowledge Seeker';
       case BadgeType.healthyHabitHero:
@@ -182,8 +180,6 @@ class VictoryWallService {
         return 'Questor Friend';
       case BadgeType.victoryVeteran:
         return 'Victory Veteran';
-      default:
-        return 'Achievement';
     }
   }
 

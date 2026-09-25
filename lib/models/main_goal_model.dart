@@ -143,7 +143,9 @@ class MainGoalModel {
       'current_xp': currentXp,
       'total_xp_required': totalXpRequired,
       'description': description,
-      'created_at': DateTime.now().toIso8601String(),
+      // NOTE: `created_at` is intentionally omitted. The DB sets it on insert
+      // (default now()); including it here previously reset the creation date
+      // on every update (XP change / archive / expire), corrupting ordering.
       'updated_at': DateTime.now().toIso8601String(),
       'is_archived': isArchived,
       'completed_at': completedAt?.toIso8601String(),

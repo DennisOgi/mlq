@@ -58,31 +58,39 @@ Each day, the function generates **3 mini-courses** with:
 
 1. **Course Structure**:
    - Title (catchy, teen-friendly)
-   - Topic (from leadership topics list)
+   - Topic (from combined leadership + health topics list)
    - 3 Lessons (each with title and content)
    - Quiz (5 questions with 4 options each)
 
-2. **Topics Pool**:
-   - Leadership
-   - Personal Growth
-   - Confidence
-   - Communication
-   - Motivation
-   - Emotional Intelligence
-   - Self-Discipline
-   - Mindset
-   - Productivity
-   - Creativity
-   - Goal Setting
-   - Decision Making
-   - Resilience
-   - Problem Solving
-   - Influence
-   - Time Management
-   - Conflict Resolution
-   - Teamwork & Collaboration
+2. **Topics Pool** (combined leadership + health — see `mini_course_topic_pool.json`):
 
-3. **Seasonal Topics** (Dec 1 - Jan 14):
+   **Leadership (18):**
+   - Leadership, Personal Growth, Confidence, Communication, Motivation
+   - Emotional Intelligence, Self-Discipline, Mindset, Productivity, Creativity
+   - Goal Setting, Decision Making, Resilience, Problem Solving, Influence
+   - Time Management, Conflict Resolution, Teamwork & Collaboration
+
+   **Health for kids & teens (19 bite-size topics, ages 8–16):**
+   - *Water & Hydration:* Water First, How Much Water Do I Need?, Signs You're Thirsty, Water vs Soda and Juice
+   - *Food & Nutrition:* Eat the Rainbow, Protein Power, Smart Snacks, Breakfast Wins, Sugar Check
+   - *Movement & Exercise:* Move Every Day, Posture Power, Screen Breaks, Sleep Equals Strength
+   - *Hygiene & Self-Care:* Handwashing Like a Pro, Teeth and Smile Care, Rest and Reset
+   - *Mind & Body:* Breathe to Calm, Gratitude Journal, Faith and Health
+
+   Health courses: simple language, no medical jargon, 1 fun fact, 1 action step.
+
+   **Edge function:** `my_leadership_quest/supabase/functions/generate_global_daily_courses/index.ts` (deploy with `supabase functions deploy generate_global_daily_courses`). Requires live `GEMINI_API_KEY`.
+
+3. **Quiz rules:**
+   - 5 questions per course, 4 options each
+   - `correctAnswerIndex` is **0-based** (0 = first option)
+   - **Vary correct answer positions** — use at least 3 of the 4 positions per quiz; never cluster all answers on the same option
+
+   **Topic aliases:** Display names like `Active Listening` map to canonical pool names (e.g. `Communication`) via `topicAliases` in `mini_course_topic_pool.json`. Analytics uses these aliases automatically.
+
+   **Manual seed scripts:** Use `mini_course_manual_utils.js` + `node script.js --audit` before upsert. Requires `SUPABASE_SERVICE_ROLE_KEY` in the environment.
+
+4. **Seasonal Topics** (Dec 1 - Jan 14):
    - New Year, New Goals
    - Reflect and Reset
    - Time Management for a Fresh Start

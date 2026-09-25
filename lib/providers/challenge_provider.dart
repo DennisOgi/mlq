@@ -83,6 +83,9 @@ class ChallengeProvider extends ChangeNotifier {
     } catch (e) {
       debugPrint('Error subscribing to challenge completion stream: $e');
     }
+    
+    // Initialize challenges from database on provider creation
+    initChallenges();
   }
 
   @override
@@ -352,11 +355,19 @@ class ChallengeProvider extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+
+    if (userProvider == null || !userProvider.hasPaidAccess) {
+      _hasError = true;
+      _errorMessage =
+        'Subscribe to join challenges. Goals and Gratitude Jar stay free.';
+      notifyListeners();
+      return false;
+    }
     
     _setLoading(true);
-    bool deducted = false;
     try {
-      // For premium challenges, check if user has enough coins
+      // Premium coin spend happens inside startChallenge / unlock RPC — do not
+      // deduct on the client (would double-charge and awards cannot be refunded).
       if (isPremium && userProvider != null) {
         final user = userProvider.user;
         if (user == null || user.coins < coinCost) {
@@ -364,15 +375,17 @@ class ChallengeProvider extends ChangeNotifier {
           _errorMessage = 'Not enough coins to join this challenge';
           return false;
         }
-        // Deduct coins for premium challenge
-        await userProvider.addCoins(-coinCost);
-        deducted = true;
       }
 
       // Avoid calling backend with mock (non-UUID) IDs
       if (_supabaseService.isAuthenticated && _isUuid(challengeId)) {
-        // Start the challenge in Supabase
         await _supabaseService.startChallenge(challengeId);
+        if (isPremium && userProvider != null) {
+          await userProvider.refreshUser();
+        }
+      } else if (kDebugMode && isPremium && userProvider != null) {
+        // Mock/offline premium join only in debug
+        await userProvider.addCoins(-coinCost);
       }
 
       // Add participation locally (for both online and offline)
@@ -403,16 +416,6 @@ class ChallengeProvider extends ChangeNotifier {
       return true;
     } catch (e) {
       debugPrint('Error joining challenge: $e');
-      // Roll back coin deduction if we deducted before failing
-      if (deducted && userProvider != null) {
-        try {
-          await userProvider.addCoins(coinCost);
-        } catch (_) {
-          // swallow rollback exception but log
-          debugPrint('Failed to rollback coins after join failure');
-        }
-      }
-      // Ensure local participation isn't added on failure
       _participatingChallengeIds.remove(challengeId);
       _hasError = true;
       _errorMessage = 'Failed to join challenge';
@@ -429,8 +432,7 @@ class ChallengeProvider extends ChangeNotifier {
       _setLoading(true);
       
       if (_supabaseService.isAuthenticated) {
-        // Update challenge status in Supabase
-        await _supabaseService.updateChallengeProgress(challengeId, 0);
+        await _supabaseService.leaveChallenge(challengeId);
       }
       
       _participatingChallengeIds.remove(challengeId);

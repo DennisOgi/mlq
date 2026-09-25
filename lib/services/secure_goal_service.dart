@@ -10,7 +10,7 @@ import '../providers/user_provider.dart';
 /// Anti-gaming layers implemented:
 ///  1. Ownership validation   — goal must belong to the calling user
 ///  2. Valid completion time  — goal date must be today or in the past
-///  3. WAT-aware daily cap    — max 15 completions per calendar day (Africa/Lagos)
+///  3. WAT-aware daily cap    — max 9 completions per calendar day (Africa/Lagos)
 ///  4. Server-side authority  — RPC `complete_goal_secure` enforces the same cap;
 ///                              client-side check is a UX pre-filter only
 ///
@@ -198,6 +198,16 @@ class SecureGoalService {
         return false;
       }
 
+      if (resultMap['error'] == 'completion_too_fast') {
+        debugPrint(
+          '[SecureGoalService] Server rejected: completion too fast',
+        );
+        throw Exception(
+          resultMap['message']?.toString() ??
+              'Please wait a moment between completing daily goals.',
+        );
+      }
+
       if (resultMap['success'] != true) {
         debugPrint('[SecureGoalService] Goal completion rejected: ${resultMap['error']}');
         return false;
@@ -240,7 +250,7 @@ class SecureGoalService {
 
   // ─────────────────────────── goal creation ─────────────────────────────────
 
-  /// Create a daily goal with validation and WAT-aware duplicate guard.
+  /// Create a daily goal via secure RPC (server enforces max 3/day).
   Future<DailyGoalModel?> createDailyGoal({
     required String mainGoalId,
     required String title,
@@ -249,10 +259,6 @@ class SecureGoalService {
     try {
       if (!_supabaseService.isAuthenticated) {
         throw Exception('User must be authenticated');
-      }
-
-      if (!await _checkDailyCreationLimits()) {
-        throw Exception('Daily goal creation limit reached');
       }
 
       if (!await _validateMainGoalOwnership(mainGoalId)) {
@@ -266,60 +272,21 @@ class SecureGoalService {
         throw Exception('Cannot create goals more than 1 day in the past');
       }
 
-      final response = await _supabaseService.client
-          .from('daily_goals')
-          .insert({
-            'user_id':      _supabaseService.currentUser!.id,
-            'main_goal_id': mainGoalId,
-            'title':        title,
-            'date':         goalDate.toIso8601String(),
-            'is_completed': false,
-            'xp_value':     10,
-            'created_at':   DateTime.now().toIso8601String(),
-          })
-          .select()
-          .single();
-
-      return DailyGoalModel(
-        id:          response['id'],
-        userId:      response['user_id'],
-        title:       response['title'],
-        date:        DateTime.parse(response['date']),
-        isCompleted: false,
-        mainGoalId:  response['main_goal_id'],
-        xpValue:     response['xp_value'],
+      final saved = await _supabaseService.saveDailyGoal(
+        DailyGoalModel(
+          id: '',
+          userId: _supabaseService.currentUser!.id,
+          mainGoalId: mainGoalId,
+          title: title,
+          date: goalDate,
+          isCompleted: false,
+          xpValue: 10,
+        ),
       );
+      return saved.goal;
     } catch (e) {
-      // Propagate the server trigger error (anti_gaming) so the caller can surface it
       debugPrint('[SecureGoalService] createDailyGoal error: $e');
-      return null;
-    }
-  }
-
-  /// WAT-aware daily creation limit check (max 5 user-initiated goal creations per day).
-  Future<bool> _checkDailyCreationLimits() async {
-    try {
-      final bounds = _getTodayBoundsInWat();
-
-      final response = await _supabaseService.client
-          .from('daily_goals')
-          .select('id')
-          .eq('user_id', _supabaseService.currentUser!.id)
-          .gte('created_at', bounds.start.toIso8601String())
-          .lt('created_at',  bounds.end.toIso8601String());
-
-      // 3 daily goals/day is the app design limit (shown as "3/3" in the UI).
-      // Creation is per-day total across all main goals (the user-initiated path).
-      // AI-generated goals are handled separately via RPC and bypass this check.
-      const maxDailyGoals = 3;
-      debugPrint(
-        '[SecureGoalService] Daily goals created today (WAT): '
-        '${response.length} / $maxDailyGoals',
-      );
-      return response.length < maxDailyGoals;
-    } catch (e) {
-      debugPrint('[SecureGoalService] _checkDailyCreationLimits error: $e');
-      return false;
+      rethrow;
     }
   }
 

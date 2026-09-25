@@ -1,10 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
-// Conditional import - only use webview_flutter when available
-// This file is only used for Flutterwave payments on mobile
-// Desktop builds don't need this functionality
-
-// Stub implementation when webview_flutter is not available
+/// Hosts Flutterwave checkout and detects redirect success/cancel.
 class FlutterwaveWebViewPayment extends StatefulWidget {
   final String paymentUrl;
   final String redirectUrl;
@@ -22,73 +19,212 @@ class FlutterwaveWebViewPayment extends StatefulWidget {
   }) : super(key: key);
 
   @override
-  State<FlutterwaveWebViewPayment> createState() => _FlutterwaveWebViewPaymentState();
+  State<FlutterwaveWebViewPayment> createState() =>
+      _FlutterwaveWebViewPaymentState();
 }
 
 class _FlutterwaveWebViewPaymentState extends State<FlutterwaveWebViewPayment> {
+  late WebViewController _controller;
+  bool _isLoading = true;
+  String? _error;
+  bool _successDetected = false;
+  String? _lastTxRef;
+  String? _lastTransactionId;
+
   @override
   void initState() {
     super.initState();
-    // Show error immediately - webview not available
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      widget.onError('WebView not available on this platform. Please use mobile app for payments.');
-    });
+    _initializeWebView();
+  }
+
+  void _initializeWebView() {
+    debugPrint('🔑 [FlutterwaveWebView] Loading payment URL');
+
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(Colors.white)
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onProgress: (int progress) {
+            debugPrint('🔑 [FlutterwaveWebView] Loading: $progress%');
+          },
+          onNavigationRequest: (NavigationRequest request) {
+            _handleNavigation(request.url);
+            return NavigationDecision.navigate;
+          },
+          onPageStarted: (String url) {
+            debugPrint('🔑 [FlutterwaveWebView] Page started: $url');
+            _handleNavigation(url);
+          },
+          onPageFinished: (String url) {
+            debugPrint('🔑 [FlutterwaveWebView] Page finished: $url');
+            setState(() {
+              _isLoading = false;
+            });
+            _handleNavigation(url);
+          },
+          onWebResourceError: (WebResourceError error) {
+            debugPrint('❌ [FlutterwaveWebView] Error: ${error.description}');
+            // Still try to parse the failing URL — redirect hosts may 500
+            // after Flutterwave appends success query params.
+            final failingUrl = error.url;
+            if (failingUrl != null && failingUrl.isNotEmpty) {
+              _handleNavigation(failingUrl);
+            }
+            setState(() {
+              _error = error.description;
+              _isLoading = false;
+            });
+          },
+        ),
+      )
+      ..loadRequest(Uri.parse(widget.paymentUrl));
+  }
+
+  void _handleNavigation(String url) {
+    debugPrint('🔑 [FlutterwaveWebView] Navigating to: $url');
+
+    final isRedirect = url.contains(widget.redirectUrl) ||
+        url.contains('payment-redirect') ||
+        url.contains('mlq://payment-callback') ||
+        url.contains('status=successful') ||
+        url.contains('status=success') ||
+        url.contains('status=failed') ||
+        url.contains('status=cancelled') ||
+        (url.contains('tx_ref=') &&
+            (url.contains('transaction_id=') || url.contains('id=')));
+
+    if (isRedirect) {
+      debugPrint('✅ [FlutterwaveWebView] Payment callback detected');
+
+      final uri = Uri.tryParse(url);
+      if (uri == null) return;
+      final status = uri.queryParameters['status'];
+      final txRef = uri.queryParameters['tx_ref'];
+      final transactionId = uri.queryParameters['transaction_id'] ??
+          uri.queryParameters['id'];
+
+      if (_successDetected) {
+        return;
+      }
+
+      if (status == 'successful' || status == 'success') {
+        _successDetected = true;
+        _lastTxRef = txRef ?? _lastTxRef;
+        _lastTransactionId = transactionId ?? _lastTransactionId;
+        widget.onSuccess({
+          'status': status,
+          'tx_ref': _lastTxRef ?? txRef ?? '',
+          'transaction_id': _lastTransactionId ?? transactionId ?? '',
+        });
+        return;
+      } else if ((txRef ?? '').isNotEmpty) {
+        // Backend can verify by tx_ref even if transaction_id is missing.
+        _successDetected = true;
+        _lastTxRef = txRef;
+        _lastTransactionId = transactionId ?? '';
+        widget.onSuccess({
+          'status': 'success',
+          'tx_ref': _lastTxRef!,
+          'transaction_id': _lastTransactionId!,
+        });
+        return;
+      } else if (status == 'cancelled' || status == 'canceled') {
+        widget.onCancel();
+        return;
+      } else if (status == 'failed' || status == 'error') {
+        widget.onError('Payment failed with status: $status');
+        return;
+      }
+    }
+
+    if (url.contains('cancelled') ||
+        url.contains('canceled') ||
+        url.contains('close')) {
+      widget.onCancel();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Payment Not Available'),
+        title: const Text('Complete Payment'),
         backgroundColor: const Color(0xFFF5A623),
         leading: IconButton(
           icon: const Icon(Icons.close),
-          onPressed: widget.onCancel,
+          onPressed: () {
+            if (_successDetected && (_lastTxRef ?? '').isNotEmpty) {
+              widget.onSuccess({
+                'status': 'success',
+                'tx_ref': _lastTxRef!,
+                'transaction_id': _lastTransactionId ?? '',
+              });
+            } else {
+              widget.onCancel();
+            }
+          },
         ),
       ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(
-                Icons.payment,
-                size: 64,
-                color: Colors.grey,
-              ),
-              const SizedBox(height: 24),
-              const Text(
-                'Payment Not Available',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
+      body: Stack(
+        children: [
+          if (_error != null)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.error_outline, size: 64, color: Colors.red),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Payment Error',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _error!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.grey),
+                    ),
+                    const SizedBox(height: 24),
+                    ElevatedButton(
+                      onPressed: () {
+                        setState(() {
+                          _error = null;
+                          _isLoading = true;
+                        });
+                        _initializeWebView();
+                      },
+                      child: const Text('Retry'),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 16),
-              const Text(
-                'WebView payments are only available on mobile devices. Please use the mobile app to complete your payment.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.grey,
+            )
+          else
+            WebViewWidget(controller: _controller),
+          if (_isLoading)
+            Container(
+              color: Colors.white,
+              child: const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(
+                      valueColor:
+                          AlwaysStoppedAnimation<Color>(Color(0xFFF5A623)),
+                    ),
+                    SizedBox(height: 16),
+                    Text(
+                      'Loading payment page...',
+                      style: TextStyle(fontSize: 16, color: Colors.grey),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 32),
-              ElevatedButton(
-                onPressed: widget.onCancel,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFF5A623),
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                ),
-                child: const Text(
-                  'Go Back',
-                  style: TextStyle(fontSize: 16),
-                ),
-              ),
-            ],
-          ),
-        ),
+            ),
+        ],
       ),
     );
   }

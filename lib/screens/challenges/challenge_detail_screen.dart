@@ -451,6 +451,27 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
           );
         }
 
+        final isJoined =
+            challengeProvider.isParticipatingIn(widget.challengeId);
+        if (!isJoined && !userProvider.hasPaidAccess) {
+          return Scaffold(
+            appBar: AppBar(title: Text(challenge.title)),
+            body: Padding(
+              padding: const EdgeInsets.all(24),
+              child: FeatureLockCard(
+                title: challenge.isPremium
+                    ? 'Premium Challenge'
+                    : 'Basic Challenge',
+                description:
+                    'Join challenges with a paid plan. You can still set goals and use the Gratitude Jar.',
+                icon: challenge.isPremium
+                    ? Icons.workspace_premium_rounded
+                    : Icons.emoji_events_rounded,
+              ),
+            ),
+          );
+        }
+
         return Scaffold(
           appBar: AppBar(
             title: Text(challenge.title),
@@ -811,6 +832,10 @@ class _ChallengeDetailScreenState extends State<ChallengeDetailScreen> {
     ChallengeProvider challengeProvider,
     UserProvider userProvider,
   ) async {
+    if (!userProvider.hasPaidAccess) {
+      Navigator.pushNamed(context, '/subscription-management');
+      return;
+    }
     // Guard: require at least one main goal to participate in basic challenges
     try {
       final goalProvider = Provider.of<GoalProvider>(context, listen: false);

@@ -188,17 +188,9 @@ class _BadgesScreenState extends State<BadgesScreen> {
                 color: Colors.white,
               ),
               padding: const EdgeInsets.all(8),
-              child: Image.asset(
-                badge.imageAsset,
-                width: 40,
-                height: 40,
-                errorBuilder: (context, error, stackTrace) {
-                  return Icon(
-                    Icons.emoji_events,
-                    size: 40,
-                    color: Colors.deepPurple,
-                  );
-                },
+              child: BadgeImage(
+                badge: badge,
+                size: 40,
               ),
             ),
             const SizedBox(height: 8),
@@ -328,16 +320,9 @@ class _BadgesScreenState extends State<BadgesScreen> {
                       color: Colors.grey[100],
                     ),
                     child: ClipOval(
-                      child: Image.asset(
-                        badge.imageAsset,
+                      child: BadgeImage(
+                        badge: badge,
                         fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return const Icon(
-                            Icons.emoji_events,
-                            color: Colors.deepPurple,
-                            size: 24,
-                          );
-                        },
                       ),
                     ),
                   ),

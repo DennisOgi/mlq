@@ -21,13 +21,23 @@ class ConfigService {
   
   // Configuration keys
   static const String _geminiApiKeyKey = 'gemini_api_key';
-  static const String _defaultGeminiApiKey = 'AIzaSyAPI_9l7u49lXrC7tnxmD0lUSKl4VMr5_w'; // Updated API key
+  // Prefer a build-time injected key (`--dart-define=GEMINI_API_KEY=...`).
+  // The literal fallback keeps existing builds working; rotate the exposed key
+  // and inject the new one via dart-define, then clear the fallback.
+  static const String _defaultGeminiApiKey = String.fromEnvironment(
+    'GEMINI_API_KEY',
+    defaultValue: 'AIzaSyAYYcRhYVh2kL898zfyQP6ySwCkMNc-DLo',
+  );
   // Flutterwave config (public values only; secrets must live on server)
   static const String _flwPublicKeyKey = 'flutterwave_public_key';
   static const String _flwIsTestModeKey = 'flutterwave_is_test_mode';
   static const String _flwRedirectUrlKey = 'flutterwave_redirect_url';
-  // PRODUCTION LIVE KEYS - UPDATED 2025-10-02
-  static const String _defaultFlwPublicKey = 'FLWPUBK-3458a6b1472c5d67e1f5e1ccc4be9598-X'; // LIVE KEY
+  // Flutterwave PUBLIC key is safe to ship; override via
+  // `--dart-define=FLW_PUBLIC_KEY=...` when rotating environments.
+  static const String _defaultFlwPublicKey = String.fromEnvironment(
+    'FLW_PUBLIC_KEY',
+    defaultValue: 'FLWPUBK-3458a6b1472c5d67e1f5e1ccc4be9598-X',
+  );
   static const bool _defaultFlwIsTestMode = false; // PRODUCTION MODE
   static const String _defaultFlwRedirectUrl = 'mlq://payment-callback';
   

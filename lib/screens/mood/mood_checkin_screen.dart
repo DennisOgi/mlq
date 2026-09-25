@@ -52,6 +52,8 @@ class _MoodCheckinScreenState extends State<MoodCheckinScreen> {
         throw Exception('User not found');
       }
 
+      final alreadyCheckedIn = await _moodService.hasCheckedInToday(userId, isMorning: widget.isMorning);
+
       await _moodService.saveMoodEntry(
         userId: userId,
         mood: _selectedMood!,
@@ -60,14 +62,18 @@ class _MoodCheckinScreenState extends State<MoodCheckinScreen> {
         triggers: _selectedTriggers.toList(),
       );
 
-      // Award coins for checking in
-      userProvider.addCoins(5.0);
+      // Award coins for checking in ONLY if they haven't already checked in today
+      if (!alreadyCheckedIn) {
+        userProvider.addCoins(5.0);
+      }
 
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Mood logged! +5 coins'),
+          content: Text(alreadyCheckedIn 
+              ? 'Mood logged! (Daily check-in reward already claimed)' 
+              : 'Mood logged! +5 coins'),
           backgroundColor: AppColors.success,
         ),
       );

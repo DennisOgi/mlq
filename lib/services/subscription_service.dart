@@ -21,22 +21,29 @@ class SubscriptionService {
           .eq('is_active', true)
           .order('price', ascending: true);
 
-      return response;
+      return response
+          .where((plan) =>
+              (plan['name'] as String? ?? '').toLowerCase() != 'yearly')
+          .toList();
     } catch (e) {
       debugPrint('Error fetching subscription plans: $e');
       return [];
     }
   }
 
-  // Get a user's active subscription
+  // Get a user's active (in-period) subscription
   Future<Map<String, dynamic>?> getActiveSubscription(String userId) async {
     try {
+      final now = DateTime.now().toIso8601String();
       final response = await _client
           .from('user_subscriptions')
           .select('*, subscription_plans(*)')
           .eq('user_id', userId)
-          .eq('is_active', true)
-          .maybeSingle(); // Changed from .single() to .maybeSingle()
+          .gt('end_date', now)
+          .or('is_active.eq.true,cancelled_at.not.is.null')
+          .order('end_date', ascending: false)
+          .limit(1)
+          .maybeSingle();
 
       return response;
     } catch (e) {
@@ -54,25 +61,40 @@ class SubscriptionService {
     return planName == 'Trial';
   }
 
-  // Check if user has an active premium subscription
+  // Check if user has an active paid subscription (Monthly/Quarterly/legacy)
   Future<bool> isPremium(String userId) async {
     final activeSubscription = await getActiveSubscription(userId);
     if (activeSubscription == null) return false;
 
-    final planName = activeSubscription['subscription_plans']['name'];
-    return planName == 'Premium';
+    final plan = activeSubscription['subscription_plans'];
+    if (plan == null) return false;
+    final planName = (plan['name'] as String? ?? '').toLowerCase();
+    final price = (plan['price'] as num?) ?? 0;
+    if (price > 0) return true;
+    return planName == 'premium' ||
+        planName == 'monthly' ||
+        planName == 'quarterly' ||
+        planName == 'basic' ||
+        planName == 'trial';
   }
 
-  // Check if user has any active subscription (including Basic)
+  // Check if user has any active subscription (including Trial)
   Future<bool> hasActiveSubscription(String userId) async {
     final activeSubscription = await getActiveSubscription(userId);
     return activeSubscription != null;
   }
 
-  // Activate a trial subscription
+  // Activate a trial subscription (idempotent)
   Future<bool> activateTrialSubscription(String userId) async {
     try {
-      // Get the trial plan
+      if (await hasActiveSubscription(userId)) {
+        debugPrint('Trial/subscription already active for $userId');
+        await _client.rpc('sync_profile_premium_flag', params: {
+          'p_user_id': userId,
+        });
+        return true;
+      }
+
       final trialPlans = await _client
           .from('subscription_plans')
           .select()
@@ -88,7 +110,6 @@ class SubscriptionService {
       final startDate = DateTime.now();
       final endDate = startDate.add(Duration(days: trialPlan['duration_days']));
 
-      // Create the subscription
       await _client.from('user_subscriptions').insert({
         'id': _uuid.v4(),
         'user_id': userId,
@@ -97,6 +118,10 @@ class SubscriptionService {
         'end_date': endDate.toIso8601String(),
         'is_active': true,
         'auto_renew': false,
+      });
+
+      await _client.rpc('sync_profile_premium_flag', params: {
+        'p_user_id': userId,
       });
 
       return true;
@@ -109,28 +134,20 @@ class SubscriptionService {
   // Apply subscription benefits
   Future<bool> applySubscriptionBenefits(String userId, String planId) async {
     try {
-      // Get the plan to determine benefits
       final plan = await _client
           .from('subscription_plans')
           .select()
           .eq('id', planId)
           .single();
 
-      // Award coins based on plan
       final features = plan['features'];
       if (features != null && features['coins'] != null) {
         final int coins = features['coins'];
         if (coins > 0) {
-          // Get coin service to award coins
-          // This would typically be injected, but for simplicity we're using a direct call
-          final coinService = CoinService();
-          await coinService.addCoins(
-              userId: userId,
-              amount: coins,
-              description: 'Subscription bonus: ${plan['name']}',
-              transactionType: 'subscription_bonus',
-              referenceType: 'subscription_plan',
-              referenceId: planId);
+          debugPrint(
+            'Subscription coin bonus should be granted server-side '
+            '(plan=${plan['name']} coins=$coins)',
+          );
         }
       }
 
@@ -141,97 +158,58 @@ class SubscriptionService {
     }
   }
 
-  // Create a new subscription (without payment for now)
+  // Create a new subscription WITHOUT payment — blocked for production safety.
   Future<bool> createSubscription({
     required String userId,
     required String planId,
     required String planPeriod,
   }) async {
-    try {
-      // Get the plan
-      final plan = await _client
-          .from('subscription_plans')
-          .select()
-          .eq('id', planId)
-          .single();
-
-      // Calculate duration based on period
-      int durationDays = plan['duration_days'];
-      if (planPeriod == 'Quarterly') {
-        durationDays = 90;
-      } else if (planPeriod == 'Yearly') {
-        durationDays = 365;
-      }
-
-      final startDate = DateTime.now();
-      final endDate = startDate.add(Duration(days: durationDays));
-
-      // Deactivate any current subscriptions
-      await _client
-          .from('user_subscriptions')
-          .update({'is_active': false})
-          .eq('user_id', userId)
-          .eq('is_active', true);
-
-      // Create the new subscription
-      final subscriptionId = _uuid.v4();
-      await _client.from('user_subscriptions').insert({
-        'id': subscriptionId,
-        'user_id': userId,
-        'plan_id': planId,
-        'start_date': startDate.toIso8601String(),
-        'end_date': endDate.toIso8601String(),
-        'is_active': true,
-        'auto_renew': true,
-      });
-
-      // Apply benefits
-      await applySubscriptionBenefits(userId, planId);
-
-      return true;
-    } catch (e) {
-      debugPrint('Error creating subscription: $e');
-      return false;
-    }
+    debugPrint(
+      '⚠️ createSubscription blocked — use Flutterwave checkout instead '
+      '(user=$userId plan=$planId period=$planPeriod)',
+    );
+    return false;
   }
 
-  // Cancel a subscription
+  // Cancel a subscription — keeps access until end_date
   Future<bool> cancelSubscription(String subscriptionId) async {
     try {
-      await _client.from('user_subscriptions').update({
-        'is_active': false,
-        'auto_renew': false,
-        'updated_at': DateTime.now().toIso8601String(),
-      }).eq('id', subscriptionId);
-
-      return true;
+      final result = await _client.rpc(
+        'cancel_user_subscription',
+        params: {'p_subscription_id': subscriptionId},
+      );
+      return result == true;
     } catch (e) {
       debugPrint('Error cancelling subscription: $e');
       return false;
     }
   }
 
-  // Check for expired subscriptions
+  Future<bool> setAutoRenewal(String subscriptionId, bool autoRenew) async {
+    try {
+      final userId = _client.auth.currentUser?.id;
+      if (userId == null) return false;
+
+      await _client
+          .from('user_subscriptions')
+          .update({
+            'auto_renew': autoRenew,
+            'updated_at': DateTime.now().toIso8601String(),
+          })
+          .eq('id', subscriptionId)
+          .eq('user_id', userId);
+
+      return true;
+    } catch (e) {
+      debugPrint('Error updating auto-renewal: $e');
+      return false;
+    }
+  }
+
+  // Expire caller's past-due subscriptions and sync premium cache
   Future<void> checkForExpiredSubscriptions() async {
     try {
-      final now = DateTime.now().toIso8601String();
-
-      // Find expired subscriptions
-      final expired = await _client
-          .from('user_subscriptions')
-          .select()
-          .eq('is_active', true)
-          .lt('end_date', now);
-
-      // Deactivate each expired subscription
-      for (final subscription in expired) {
-        await _client
-            .from('user_subscriptions')
-            .update({'is_active': false, 'updated_at': now}).eq(
-                'id', subscription['id']);
-
-        // Here you would typically notify the user that their subscription has expired
-      }
+      await _client.rpc('expire_my_subscriptions');
     } catch (e) {
       debugPrint('Error checking for expired subscriptions: $e');
     }
@@ -239,44 +217,44 @@ class SubscriptionService {
 
   // ========== FREE TRIAL SYSTEM ==========
 
-  // Get user's access level (trial, free, basic, premium)
   Future<String> getUserAccessLevel(String userId) async {
     try {
       final subscription = await getActiveSubscription(userId);
       if (subscription == null) return 'free';
 
       final planName = subscription['subscription_plans']['name'] as String;
-      return planName.toLowerCase(); // 'trial', 'basic', 'premium'
+      return planName.toLowerCase();
     } catch (e) {
       debugPrint('Error getting user access level: $e');
       return 'free';
     }
   }
 
-  // Check if trial is active
   Future<bool> isTrialActive(String userId) async {
     final level = await getUserAccessLevel(userId);
     return level == 'trial';
   }
 
-  // Check if trial expired
+  /// True when user previously had a Trial that ended and has no current access.
   Future<bool> isTrialExpired(String userId) async {
     try {
-      final subscription = await getActiveSubscription(userId);
-      if (subscription == null) return false;
+      if (await hasActiveSubscription(userId)) return false;
 
-      final planName = subscription['subscription_plans']['name'] as String;
-      if (planName != 'Trial') return false;
+      final pastTrials = await _client
+          .from('user_subscriptions')
+          .select('id, end_date, subscription_plans!inner(name)')
+          .eq('user_id', userId)
+          .eq('subscription_plans.name', 'Trial')
+          .lt('end_date', DateTime.now().toIso8601String())
+          .limit(1);
 
-      final endDate = DateTime.parse(subscription['end_date'] as String);
-      return DateTime.now().isAfter(endDate);
+      return pastTrials.isNotEmpty;
     } catch (e) {
       debugPrint('Error checking if trial expired: $e');
       return false;
     }
   }
 
-  // Get trial days remaining
   Future<int> getTrialDaysRemaining(String userId) async {
     try {
       final subscription = await getActiveSubscription(userId);
@@ -286,88 +264,83 @@ class SubscriptionService {
       if (planName != 'Trial') return 0;
 
       final endDate = DateTime.parse(subscription['end_date'] as String);
-      final remaining = endDate.difference(DateTime.now()).inDays;
-      return remaining > 0 ? remaining : 0;
+      final remaining = endDate.difference(DateTime.now());
+      if (remaining.isNegative || remaining.inSeconds <= 0) return 0;
+      final days = (remaining.inMilliseconds / Duration.millisecondsPerDay)
+          .ceil();
+      return days < 1 ? 1 : days;
     } catch (e) {
       debugPrint('Error getting trial days remaining: $e');
       return 0;
     }
   }
 
-  // Check mini courses access
+  bool _hasPremiumAccess(String level) {
+    return [
+      'trial',
+      'basic',
+      'premium',
+      'monthly',
+      'quarterly',
+      'yearly',
+    ].contains(level);
+  }
+
   Future<bool> canAccessMiniCourses(String userId) async {
     final level = await getUserAccessLevel(userId);
-    return ['trial', 'basic', 'premium'].contains(level);
+    return _hasPremiumAccess(level);
   }
 
-  // Check basic challenges access
   Future<bool> canAccessBasicChallenges(String userId) async {
     final level = await getUserAccessLevel(userId);
-    return ['trial', 'basic', 'premium'].contains(level);
+    return _hasPremiumAccess(level);
   }
 
-  // Check premium challenges access
   Future<bool> canAccessPremiumChallenges(String userId) async {
     final level = await getUserAccessLevel(userId);
-    return level == 'premium';
+    return _hasPremiumAccess(level);
   }
 
-  // Check if trial is expiring soon (< 3 days)
   Future<bool> isTrialExpiringSoon(String userId) async {
     final daysRemaining = await getTrialDaysRemaining(userId);
     return daysRemaining > 0 && daysRemaining <= 3;
   }
 
-  // Get comprehensive access status
   Future<Map<String, dynamic>> getUserAccessStatus(String userId) async {
     final level = await getUserAccessLevel(userId);
     final daysRemaining = await getTrialDaysRemaining(userId);
     final isExpiringSoon = await isTrialExpiringSoon(userId);
+    final trialExpired = await isTrialExpired(userId);
 
     return {
       'access_level': level,
       'is_trial': level == 'trial',
       'is_free': level == 'free',
       'is_basic': level == 'basic',
-      'is_premium': level == 'premium',
+      'is_premium': _hasPremiumAccess(level),
       'trial_days_remaining': daysRemaining,
       'trial_expiring_soon': isExpiringSoon,
+      'trial_expired': trialExpired,
       'can_access_mini_courses': await canAccessMiniCourses(userId),
       'can_access_basic_challenges': await canAccessBasicChallenges(userId),
       'can_access_premium_challenges': await canAccessPremiumChallenges(userId),
     };
   }
 
-  // Helper method: Get trial status (used by UI components)
   Future<Map<String, dynamic>> getTrialStatus(String userId) async {
     final level = await getUserAccessLevel(userId);
     final daysRemaining = await getTrialDaysRemaining(userId);
+    final trialExpired = await isTrialExpired(userId);
 
     return {
       'isOnTrial': level == 'trial',
       'daysRemaining': daysRemaining,
       'isExpiringSoon': daysRemaining > 0 && daysRemaining <= 3,
+      'isExpired': trialExpired,
     };
   }
 
-  // Helper method: Assign trial plan to new user
   Future<bool> assignTrialPlan(String userId) async {
     return await activateTrialSubscription(userId);
-  }
-}
-
-class CoinService {
-  // This is a placeholder for the actual CoinService
-  // We'll implement this next
-  Future<bool> addCoins({
-    required String userId,
-    required num amount,
-    required String description,
-    required String transactionType,
-    String? referenceType,
-    String? referenceId,
-  }) async {
-    // Will be implemented in the CoinService
-    return true;
   }
 }

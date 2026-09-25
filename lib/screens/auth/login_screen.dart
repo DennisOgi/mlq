@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:my_leadership_quest/main.dart';
+import 'package:my_leadership_quest/screens/vas/vas_portal_screen.dart';
+import 'package:my_leadership_quest/services/vas_session.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -9,12 +10,16 @@ import '../../utils/error_handler.dart';
 import '../../theme/app_colors.dart' as theme;
 import '../../theme/app_text_styles.dart' as theme;
 import '../../widgets/quest_button.dart';
+import '../../widgets/mlq_auth_backdrop.dart';
 import 'signup_screen.dart';
 import 'forgot_password_screen.dart';
 import '../legal/legal_markdown_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  /// When true (telco/SMS portal), navigate to [VasPortalScreen] after login.
+  final bool returnToVas;
+
+  const LoginScreen({super.key, this.returnToVas = false});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -100,11 +105,7 @@ class _LoginScreenState extends State<LoginScreen> {
           );
 
           if (success && mounted) {
-            Navigator.of(context).pushAndRemoveUntil(
-              MaterialPageRoute(
-                  builder: (context) => const MainNavigationScreen()),
-              (route) => false,
-            );
+            await _goAfterAuth();
             return;
           }
         }
@@ -126,7 +127,13 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _login() async {
+    if (_isLoading) return;
     if (!_formKey.currentState!.validate()) return;
+    final existing = Provider.of<UserProvider>(context, listen: false);
+    if (existing.isAuthenticated) {
+      await _goAfterAuth();
+      return;
+    }
     setState(() {
       _isLoading = true;
       _errorMessage = null;
@@ -154,7 +161,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
         if (!mounted) return;
 
-        // Show success animation before navigating
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -166,15 +172,9 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         );
 
-        // Navigate to home screen after a short delay
-        Future.delayed(const Duration(seconds: 1), () {
-          if (!mounted) return;
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(
-                builder: (context) => const MainNavigationScreen()),
-            (route) => false,
-          );
-        });
+        // Auth gate swaps this screen for MainNavigation. Do not delay or
+        // pushAndRemoveUntil — that races Home dialogs onto Login.
+        await _goAfterAuth();
       } else {
         final detailed = userProvider.lastErrorMessage;
         if (!mounted) return;
@@ -194,20 +194,47 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _goAfterAuth() async {
+    final toVas = widget.returnToVas || VasSession.isActive;
+    if (toVas) {
+      await VasSession.enter(demo: VasSession.isDemo);
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (context) => const VasPortalScreen(),
+        ),
+        (route) => false,
+      );
+      return;
+    }
+    if (!mounted) return;
+    // Onboarding used to push Login on top of the auth gate. After sign-in
+    // Home mounts underneath and Login stays visible unless we pop back.
+    final nav = Navigator.of(context);
+    if (nav.canPop()) {
+      nav.popUntil((route) => route.isFirst);
+      return;
+    }
+    setState(() => _isLoading = false);
+  }
+
   void _navigateToSignUp() {
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (context) => const SignupScreen()),
+      MaterialPageRoute(
+        builder: (context) => SignupScreen(returnToVas: widget.returnToVas),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Form(
+      body: MlqAuthBackdrop(
+        child: SafeArea(
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Form(
               key: _formKey,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -452,6 +479,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
           ),
+        ),
         ),
       ),
     );

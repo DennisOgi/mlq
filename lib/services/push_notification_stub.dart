@@ -16,6 +16,10 @@ class PushNotificationStub {
     return null;
   }
 
+  Future<dynamic> getInitialMessage() async {
+    return null;
+  }
+
   Future<void> subscribeToTopic(String topic) async {
     // No-op
   }

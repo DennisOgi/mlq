@@ -58,7 +58,7 @@ class _UpgradeSubscriptionScreenState extends State<UpgradeSubscriptionScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[50],
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         title: Text(
           'Upgrade to ${widget.planName}',
@@ -376,7 +376,8 @@ class _UpgradeSubscriptionScreenState extends State<UpgradeSubscriptionScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            '• Your subscription will auto-renew unless cancelled\n'
+            '• Access lasts for the plan period you paid for\n'
+            '• Cancel anytime — you keep access until the period ends\n'
             '• You can cancel anytime from your profile settings\n'
             '• Refunds are processed according to our refund policy\n'
             '• Premium features activate immediately after payment',
@@ -458,23 +459,31 @@ class _UpgradeSubscriptionScreenState extends State<UpgradeSubscriptionScreen> {
 
   List<String> _getBenefitsForPlan(String planName) {
     switch (planName.toLowerCase()) {
-      case 'basic':
+      case 'monthly':
         return [
-          'Access to basic challenges',
-          '500 coins per month',
+          'Full MLQ access for 30 days',
+          '1000 coins included',
+          'Unlimited challenges',
           'Leadership mini courses',
-          'Email support',
-          'Mobile app access',
+          'AI Coach & Communities',
+          'Premium checkmark badge',
         ];
+      case 'quarterly':
+        return [
+          'Full MLQ access for 90 days',
+          '3000 coins included',
+          'Unlimited challenges',
+          'Leadership mini courses',
+          'AI Coach & Communities',
+          'Premium checkmark badge',
+          'Best value',
+        ];
+      case 'basic':
       case 'premium':
         return [
-          'Premium subscription qualifies for rewards',
-          'Premium checkmark badge',
-          'Unlimited premium challenges',
-          'Leadership mini courses',
-          'Create & manage Communities',
-          '1000 coins per month',
-          'Priority support',
+          'Full MLQ access',
+          'Challenges & mini courses',
+          'Premium features',
         ];
       default:
         return [
@@ -507,7 +516,7 @@ class _UpgradeSubscriptionScreenState extends State<UpgradeSubscriptionScreen> {
       // Generate transaction reference
       txRef = _uuid.v4();
 
-      // Create payment attempt for subscription (align with coins flow)
+      // Create payment attempt for subscription (required for verify)
       try {
         await SupabaseService().client.rpc('create_payment_attempt', params: {
           'p_user_id': user.id,
@@ -525,6 +534,9 @@ class _UpgradeSubscriptionScreenState extends State<UpgradeSubscriptionScreen> {
         });
       } catch (e) {
         debugPrint('⚠️ [Subscription] Failed to create payment attempt: $e');
+        throw Exception(
+          'Could not start payment securely. Please try again in a moment.',
+        );
       }
 
       // Initialize payment using Flutterwave API (same as shop screen)
@@ -535,7 +547,7 @@ class _UpgradeSubscriptionScreenState extends State<UpgradeSubscriptionScreen> {
         amount: widget.price.toDouble(),
         currency: 'NGN',
         txRef: txRef,
-        redirectUrl: 'https://mlq.app/redirect',
+        redirectUrl: FlutterwaveService.paymentRedirectUrl,
         phoneNumber: '',
         meta: {
           'type': 'subscription',
@@ -546,7 +558,7 @@ class _UpgradeSubscriptionScreenState extends State<UpgradeSubscriptionScreen> {
           'tx_ref': txRef,
           'amount': widget.price,
           'expires_at':
-              DateTime.now().add(const Duration(minutes: 30)).toIso8601String(),
+              DateTime.now().add(const Duration(hours: 24)).toIso8601String(),
         },
       );
 
@@ -568,7 +580,7 @@ class _UpgradeSubscriptionScreenState extends State<UpgradeSubscriptionScreen> {
         MaterialPageRoute(
           builder: (context) => FlutterwaveWebViewPayment(
             paymentUrl: paymentLink,
-            redirectUrl: 'https://mlq.app/redirect',
+            redirectUrl: FlutterwaveService.paymentRedirectUrl,
             onSuccess: (data) {
               Navigator.of(context).pop(data);
             },
@@ -600,19 +612,25 @@ class _UpgradeSubscriptionScreenState extends State<UpgradeSubscriptionScreen> {
           (status.isEmpty || status == 'null' || status == 'cancelled') &&
               paymentResult?['transaction_id'] != null;
 
-      // Also check for any response that has a transaction ID
+      // Also check for any response that has a transaction ID or tx_ref
+      // (backend can verify by Flutterwave reference alone).
       final hasTransactionId = paymentResult?['transaction_id'] != null &&
           paymentResult!['transaction_id'].toString().isNotEmpty;
+      final resultTxRef = (paymentResult?['tx_ref'] ?? txRef).toString();
+      final canVerify = hasTransactionId ||
+          resultTxRef.isNotEmpty &&
+              (isSuccessful || userClosedAfterPayment || status.isEmpty);
 
       debugPrint(
-          'Status analysis: isSuccessful=$isSuccessful, userClosedAfterPayment=$userClosedAfterPayment, hasTransactionId=$hasTransactionId');
+          'Status analysis: isSuccessful=$isSuccessful, userClosedAfterPayment=$userClosedAfterPayment, hasTransactionId=$hasTransactionId, canVerify=$canVerify');
 
-      if ((isSuccessful || userClosedAfterPayment || hasTransactionId) &&
-          paymentResult?['transaction_id'] != null) {
+      if ((isSuccessful || userClosedAfterPayment || hasTransactionId || canVerify) &&
+          resultTxRef.isNotEmpty &&
+          (hasTransactionId || isSuccessful || userClosedAfterPayment)) {
         // Verify payment with backend
         final success = await _verifyPaymentWithRetry(
-          transactionId: paymentResult!['transaction_id'].toString(),
-          txRef: txRef,
+          transactionId: paymentResult?['transaction_id']?.toString() ?? '',
+          txRef: resultTxRef,
           userId: user.id,
           planId: widget.planId,
           amount: widget.price,
@@ -657,11 +675,17 @@ class _UpgradeSubscriptionScreenState extends State<UpgradeSubscriptionScreen> {
         }
       } else if (status == 'cancelled' &&
           paymentResult?['transaction_id'] == null) {
-        // Only treat as cancelled if there's no transaction ID
-        throw Exception('Payment was cancelled');
+        // Bank transfer can complete after the WebView is closed; keep attempt pending.
+        throw Exception(
+          'Checkout closed. If you chose bank transfer, complete the transfer — '
+          'your subscription activates automatically when payment arrives '
+          '(usually within a few minutes).',
+        );
       } else if (paymentResult?['transaction_id'] == null && !isSuccessful) {
-        // No transaction ID and not successful = user cancelled before payment
-        throw Exception('Payment was cancelled');
+        throw Exception(
+          'Checkout closed. If you already paid by bank transfer, wait a few '
+          'minutes then reopen this screen to confirm your subscription.',
+        );
       } else {
         // Unknown status but might have transaction ID - check backend
         throw Exception(status.isNotEmpty ? status : 'Payment status unknown');

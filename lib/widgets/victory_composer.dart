@@ -5,6 +5,8 @@ import 'package:uuid/uuid.dart';
 import '../constants/app_constants.dart';
 import '../models/models.dart';
 import '../providers/providers.dart';
+import '../utils/entitlements.dart';
+import '../widgets/feature_lock_card.dart';
 import '../services/badge_service.dart';
 import '../services/victory_wall_service.dart';
 
@@ -28,20 +30,32 @@ class _VictoryComposerState extends State<VictoryComposer> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 12),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.primary.withOpacity(0.04),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: AppColors.primary.withOpacity(0.2),
-          width: 1.5,
+    final user = context.watch<UserProvider>().user;
+    if (!Entitlements.hasPaidAccess(user)) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: FeatureLockCard(
+          compact: true,
+          title: 'Post on the Victory Wall',
+          description:
+              'Sharing wins unlocks with a paid plan. You can still read the feed.',
+          icon: Icons.celebration_rounded,
         ),
+      );
+    }
+
+    final name = user?.name.trim() ?? '';
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.border),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
+            color: AppColors.plum.withOpacity(0.05),
+            blurRadius: 12,
             offset: const Offset(0, 4),
           ),
         ],
@@ -49,43 +63,98 @@ class _VictoryComposerState extends State<VictoryComposer> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            'Share your win',
-            style: AppTextStyles.bodyBold,
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _controller,
-            maxLines: 3,
-            minLines: 2,
-            decoration: InputDecoration(
-              hintText: 'I accomplished...',
-              filled: true,
-              fillColor: AppColors.surface,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CircleAvatar(
+                radius: 20,
+                backgroundColor: AppColors.primarySoft,
+                child: Text(
+                  name.isNotEmpty ? name[0].toUpperCase() : '?',
+                  style: AppTextStyles.bodyBold
+                      .copyWith(color: AppColors.primary),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  controller: _controller,
+                  maxLines: 4,
+                  minLines: 1,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: InputDecoration(
+                    hintText: 'Share a win…',
+                    filled: true,
+                    fillColor: AppColors.background,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 12),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.only(top: 8.0),
-              child: Text(_error!, style: const TextStyle(color: Colors.red)),
+              child: Text(_error!, style: const TextStyle(color: AppColors.error)),
             ),
           const SizedBox(height: 10),
-          Align(
-            alignment: Alignment.centerRight,
-            child: ElevatedButton.icon(
-              onPressed: _submitting ? null : _submit,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.secondary,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          Row(
+            children: [
+              _starter('🏆', 'Achievement', 'I achieved '),
+              const SizedBox(width: 8),
+              _starter('😊', 'Feeling', 'Today I feel '),
+              const Spacer(),
+              ElevatedButton(
+                onPressed: _submitting ? null : _submit,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.secondary,
+                  foregroundColor: AppColors.textOnGold,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                ),
+                child: Text(
+                  _submitting ? 'Posting…' : 'Post',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
               ),
-              icon: const Icon(Icons.celebration, size: 18),
-              label: Text(_submitting ? 'Posting...' : 'Post'),
-            ),
+            ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _starter(String emoji, String label, String prefix) {
+    return Material(
+      color: AppColors.primarySoft,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () {
+          if (!_controller.text.startsWith(prefix)) {
+            _controller.text = prefix + _controller.text;
+          }
+          _controller.selection =
+              TextSelection.collapsed(offset: _controller.text.length);
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          child: Text(
+            '$emoji $label',
+            style: AppTextStyles.caption.copyWith(
+              color: AppColors.primary,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
       ),
     );
   }

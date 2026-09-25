@@ -90,7 +90,7 @@ class SupabaseService {
       return {'is_premium': false, 'organizations': []};
     } catch (e) {
       debugPrint('Error fetching entitlements: $e');
-      return {'is_premium': false, 'organizations': []};
+      return {'is_premium': false, 'organizations': [], '_failed': true};
     }
   }
 
@@ -168,8 +168,28 @@ class SupabaseService {
 
   SupabaseService._internal();
 
+  bool _initialized = false;
+
+  /// Whether [initialize] has completed and [client] is safe to use.
+  bool get isReady {
+    if (!_initialized) return false;
+    try {
+      Supabase.instance;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // Supabase client getter
-  SupabaseClient get client => Supabase.instance.client;
+  SupabaseClient get client {
+    if (!isReady) {
+      throw StateError(
+        'Supabase is not initialized. Call SupabaseService.instance.initialize() first.',
+      );
+    }
+    return Supabase.instance.client;
+  }
   static const _host = 'hcvyumbkonrisrxbjnst.supabase.co';
   static const _defaultTimeout = Duration(seconds: 12);
 
@@ -197,6 +217,14 @@ class SupabaseService {
 
   // Initialize Supabase
   Future<void> initialize() async {
+    // Hot restart can reset the Supabase singleton while our flag stays true.
+    if (_initialized && isReady) {
+      return;
+    }
+    if (_initialized && !isReady) {
+      _initialized = false;
+    }
+
     try {
       await Supabase.initialize(
         url: 'https://hcvyumbkonrisrxbjnst.supabase.co',
@@ -204,11 +232,22 @@ class SupabaseService {
             'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhjdnl1bWJrb25yaXNyeGJqbnN0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE0NTcyOTIsImV4cCI6MjA2NzAzMzI5Mn0.6OS27VWKITYjfF5aKg7BMqxYu2wphh24O26J2-NMoew',
       );
 
+      _initialized = true;
+
       // Set up auth state listener
       _setupAuthStateListener();
 
       debugPrint('Supabase initialized successfully');
     } catch (e) {
+      final msg = e.toString().toLowerCase();
+      // Supabase may already be initialized in some restart edge cases.
+      if (msg.contains('already') && msg.contains('initialized')) {
+        _initialized = true;
+        _setupAuthStateListener();
+        debugPrint('Supabase already initialized (reused existing instance)');
+        return;
+      }
+      _initialized = false;
       debugPrint('Error initializing Supabase: $e');
       rethrow;
     }
@@ -816,7 +855,69 @@ class SupabaseService {
     }
   }
 
-  // Reset password
+  // --- Security Questions Password Reset Flow ---
+  
+  Future<void> setSecurityQuestions(String q1, String a1, String q2, String a2) async {
+    try {
+      if (currentUser == null) throw const UserFacingError('You must be signed in to set security questions.');
+      
+      await client.rpc('set_security_questions', params: {
+        'q1': q1,
+        'a1': a1,
+        'q2': q2,
+        'a2': a2,
+      });
+      debugPrint('Security questions set successfully');
+    } catch (e) {
+      debugPrint('Error setting security questions: $e');
+      throw const UserFacingError('Could not save security questions. Please try again.');
+    }
+  }
+
+  Future<Map<String, dynamic>?> getSecurityQuestionsForEmail(String email) async {
+    try {
+      final response = await client.rpc('get_security_questions', params: {
+        'p_email': email.toLowerCase().trim(),
+      });
+      
+      if (response == null) return null;
+      return Map<String, dynamic>.from(response as Map);
+    } catch (e) {
+      debugPrint('Error getting security questions: $e');
+      return null;
+    }
+  }
+
+  Future<void> resetPasswordWithSecurityQuestions(
+    String email, String a1, String a2, String newPassword
+  ) async {
+    try {
+      if (!_isValidPassword(newPassword)) {
+        throw const UserFacingError(
+          'Password must be at least 8 characters and include both letters and numbers.',
+        );
+      }
+
+      final result = await client.rpc('reset_password_with_security_questions', params: {
+        'p_email': email.toLowerCase().trim(),
+        'p_answer_1': a1,
+        'p_answer_2': a2,
+        'p_new_password': newPassword,
+      });
+      
+      if (result != true) {
+        throw const UserFacingError('Answers were incorrect or user not found.');
+      }
+      
+      debugPrint('Password reset securely via questions for: $email');
+    } catch (e) {
+      debugPrint('Error resetting password via questions: $e');
+      if (e is UserFacingError) rethrow;
+      throw const UserFacingError('Failed to reset password. Please verify your answers and try again.');
+    }
+  }
+
+  // Reset password (Legacy email flow)
   Future<void> resetPassword(String email) async {
     try {
       await client.auth.resetPasswordForEmail(
@@ -948,6 +1049,7 @@ class SupabaseService {
     int? preferredSendDow,
     int? preferredSendHour,
     int? preferredSendMinute,
+    String? gender,
   }) async {
     try {
       if (currentUser == null) return;
@@ -965,6 +1067,7 @@ class SupabaseService {
         if (preferredSendHour != null) 'preferred_send_hour': preferredSendHour,
         if (preferredSendMinute != null)
           'preferred_send_minute': preferredSendMinute,
+        if (gender != null) 'gender': gender,
         'updated_at': DateTime.now().toIso8601String(),
       };
 
@@ -975,7 +1078,26 @@ class SupabaseService {
     }
   }
 
-  // Add coins to user with optional metadata for transaction audit
+  /// Admin-only: assign an existing user (by email) to a sponsor account.
+  /// Requires `public.admin_assign_sponsor_user` migration.
+  Future<Map<String, dynamic>> adminAssignSponsorUser({
+    required String sponsorId,
+    required String email,
+    String role = 'manager',
+  }) async {
+    final res = await client.rpc('admin_assign_sponsor_user', params: {
+      'p_sponsor_id': sponsorId,
+      'p_email': email,
+      'p_role': role,
+    });
+    if (res is Map<String, dynamic>) return res;
+    if (res is Map) return Map<String, dynamic>.from(res);
+    return {'ok': false, 'error': 'unexpected_response'};
+  }
+
+  // Add coins to user with optional metadata for transaction audit.
+  // Positive awards are server-only (blocked by DB guard). Use this only for
+  // spends (negative amounts) via spend_coins, or no-op for legacy award calls.
   Future<bool> addCoins(
     double amount, {
     String description = 'Coin award',
@@ -986,36 +1108,28 @@ class SupabaseService {
     try {
       if (currentUser == null) return false;
 
-      // First get current coins
-      final response = await client
-          .from('profiles')
-          .select('coins')
-          .eq('id', currentUser!.id)
-          .single();
+      if (amount > 0) {
+        debugPrint(
+          '⚠️ Client coin award blocked ($amount). Awards are server-side only.',
+        );
+        return false;
+      }
 
-      final currentCoins = (response['coins'] as num).toDouble();
-      final newCoins = currentCoins + amount;
+      if (amount < 0) {
+        final result = await client.rpc('spend_coins', params: {
+          'p_amount': amount.abs(),
+          'p_description': description,
+          'p_reference_type': referenceType,
+          'p_reference_id': referenceId,
+        });
+        if (result is Map && result['success'] == true) return true;
+        debugPrint('spend_coins failed: $result');
+        return false;
+      }
 
-      await client
-          .from('profiles')
-          .update({'coins': newCoins}).eq('id', currentUser!.id);
-
-      // Log this coin award for tracking purposes
-      await client.from('coin_transactions').insert({
-        'user_id': currentUser!.id,
-        'amount': amount,
-        'balance_after': newCoins,
-        'description': description,
-        'transaction_type': transactionType,
-        'reference_type': referenceType,
-        if (referenceId != null) 'reference_id': referenceId,
-      });
-
-      debugPrint(
-          'Added $amount coins to user ${currentUser!.id}. New total: $newCoins');
       return true;
     } catch (e) {
-      debugPrint('Error adding coins: $e');
+      debugPrint('Error in addCoins: $e');
       return false;
     }
   }
@@ -1024,80 +1138,53 @@ class SupabaseService {
   Future<bool> spendCoins(double amount) async {
     try {
       if (currentUser == null) return false;
+      if (amount <= 0) return false;
 
-      // First get current coins
-      final response = await client
-          .from('profiles')
-          .select('coins')
-          .eq('id', currentUser!.id)
-          .single();
-
-      final currentCoins = (response['coins'] as num).toDouble();
-
-      // Check if user has enough coins
-      if (currentCoins < amount) return false;
-
-      final newCoins = currentCoins - amount;
-
-      await client
-          .from('profiles')
-          .update({'coins': newCoins}).eq('id', currentUser!.id);
-
-      return true;
+      final result = await client.rpc('spend_coins', params: {
+        'p_amount': amount,
+        'p_description': 'Coin spend',
+        'p_reference_type': 'spend',
+      });
+      if (result is Map && result['success'] == true) return true;
+      debugPrint('spend_coins failed: $result');
+      return false;
     } catch (e) {
       debugPrint('Error spending coins: $e');
       return false;
     }
   }
 
-  // Add XP to user
+  // XP is server-authoritative via complete_goal_secure only.
+  @Deprecated('XP can only be awarded by completing daily goals on the server')
   Future<void> addXp(int amount) async {
-    try {
-      if (currentUser == null) return;
+    debugPrint(
+      '[SupabaseService] addXp ignored ($amount) — XP is server-authoritative (goals, quizzes, gratitude)',
+    );
+  }
 
-      // Add XP to the current logged-in user
-      await addXpToUser(currentUser!.id, amount);
+  /// Admin-only XP award via server RPC.
+  Future<bool> adminAwardXpToUser(
+    String userId,
+    int amount, {
+    String reason = 'Admin XP award',
+  }) async {
+    try {
+      final result = await client.rpc('admin_award_xp', params: {
+        'p_user_id': userId,
+        'p_amount': amount,
+        'p_reason': reason,
+      });
+      final map = Map<String, dynamic>.from(result as Map);
+      return map['success'] == true;
     } catch (e) {
-      debugPrint('Error adding XP: $e');
-      rethrow;
+      debugPrint('Error admin awarding XP to user $userId: $e');
+      return false;
     }
   }
 
-  // Add XP to any user by ID (for admin use)
-  // Updates both lifetime XP and monthly XP for leaderboard ranking
+  @Deprecated('Use adminAwardXpToUser for admins; goals use complete_goal_secure')
   Future<bool> addXpToUser(String userId, int amount) async {
-    try {
-      debugPrint('Adding $amount XP to user $userId');
-
-      // First get current XP and monthly XP
-      final response = await client
-          .from('profiles')
-          .select('xp, monthly_xp')
-          .eq('id', userId)
-          .single();
-
-      debugPrint('Current XP response: $response');
-      final currentXp = (response['xp'] as num?)?.toInt() ?? 0;
-      final currentMonthlyXp = (response['monthly_xp'] as num?)?.toInt() ?? 0;
-      final newXp = currentXp + amount;
-      final newMonthlyXp = currentMonthlyXp + amount;
-      debugPrint(
-          'Current XP: $currentXp, Monthly XP: $currentMonthlyXp, Adding: $amount');
-
-      // Update both xp (lifetime) and monthly_xp (for monthly leaderboard)
-      await client.from('profiles').update({
-        'xp': newXp,
-        'monthly_xp': newMonthlyXp,
-      }).eq('id', userId);
-
-      debugPrint(
-          '✅ XP updated successfully: xp $currentXp → $newXp, monthly_xp $currentMonthlyXp → $newMonthlyXp (+$amount)');
-
-      return true;
-    } catch (e) {
-      debugPrint('Error adding XP to user $userId: $e');
-      return false;
-    }
+    return adminAwardXpToUser(userId, amount);
   }
 
   // This duplicate method has been removed and merged with the original addCoins method above
@@ -1242,38 +1329,53 @@ class SupabaseService {
   }
 
   // Save daily goal to Supabase
-  Future<DailyGoalModel> saveDailyGoal(DailyGoalModel goal) async {
+  /// Creates a daily goal via secure RPC (awards 0.5 coins server-side).
+  /// Returns the saved goal; [coinsAwarded] is set when the RPC succeeds.
+  Future<({DailyGoalModel goal, double coinsAwarded})> saveDailyGoal(
+      DailyGoalModel goal) async {
     try {
       if (currentUser == null) throw Exception('User not authenticated');
 
-      // Convert goal to JSON format
-      final goalJson = goal.toJson();
+      final result = await client.rpc('create_daily_goal_secure', params: {
+        'p_title': goal.title,
+        'p_main_goal_id': goal.mainGoalId,
+        'p_date': goal.date.toIso8601String(),
+        'p_xp_value': goal.xpValue,
+      });
 
-      // Remove the ID if it's temporary or not a valid UUID format
-      if (goal.id.startsWith('temp_') || !_isValidUuid(goal.id)) {
-        goalJson.remove('id');
+      if (result is! Map) {
+        throw Exception('Unexpected create_daily_goal_secure response');
       }
 
-      // Make sure user_id is set to the current user
-      goalJson['user_id'] = currentUser!.id;
+      if (result['success'] != true) {
+        final err = result['error']?.toString() ?? 'create_failed';
+        final message = result['message']?.toString();
+        if (err == 'daily_limit_reached') {
+          throw Exception('Daily goal limit reached');
+        }
+        if (err == 'daily_goal_cloned') {
+          throw Exception(message ?? 'daily_goal_cloned');
+        }
+        throw Exception(message ?? err);
+      }
 
-      // Insert goal into daily_goals table
-      final response =
-          await client.from('daily_goals').insert(goalJson).select().single();
-
-      // Map the response back to our model
+      final goalJson = Map<String, dynamic>.from(result['goal'] as Map);
       final updatedGoal = DailyGoalModel(
-        id: response['id'],
-        userId: response['user_id'],
-        title: response['title'],
-        date: DateTime.parse(response['date']),
-        isCompleted: response['is_completed'],
-        mainGoalId: response['main_goal_id'],
-        xpValue: response['xp_value'],
+        id: goalJson['id'],
+        userId: goalJson['user_id'],
+        title: goalJson['title'],
+        date: DateTime.parse(goalJson['date'].toString()),
+        isCompleted: goalJson['is_completed'] ?? false,
+        mainGoalId: goalJson['main_goal_id'],
+        xpValue: goalJson['xp_value'] ?? goal.xpValue,
       );
 
-      debugPrint('Daily goal saved successfully with ID: ${updatedGoal.id}');
-      return updatedGoal;
+      final coinsAwarded =
+          (result['coins_awarded'] as num?)?.toDouble() ?? 0.5;
+
+      debugPrint(
+          'Daily goal saved via RPC: ${updatedGoal.id} (+$coinsAwarded coins)');
+      return (goal: updatedGoal, coinsAwarded: coinsAwarded);
     } catch (e) {
       debugPrint('Error saving daily goal: $e');
       rethrow;
@@ -1442,6 +1544,23 @@ class SupabaseService {
   }
 
   // Fetch user's active challenges
+  /// Leave (abandon) an incomplete challenge enrollment.
+  Future<bool> leaveChallenge(String challengeId) async {
+    try {
+      if (currentUser == null) return false;
+      final result = await client.rpc(
+        'leave_challenge',
+        params: {'p_challenge_id': challengeId},
+      );
+      if (result is Map && result['success'] == true) return true;
+      debugPrint('leave_challenge failed: $result');
+      return false;
+    } catch (e) {
+      debugPrint('Error leaving challenge: $e');
+      return false;
+    }
+  }
+
   Future<List<UserChallengeModel>> fetchUserChallenges() async {
     try {
       if (currentUser == null) return [];
@@ -1449,7 +1568,8 @@ class SupabaseService {
       final response = await client
           .from('user_challenges')
           .select('*, challenge:challenge_id(*)')
-          .eq('user_id', currentUser!.id);
+          .eq('user_id', currentUser!.id)
+          .neq('status', 'abandoned');
 
       final List<UserChallengeModel> userChallenges = [];
 
@@ -1508,9 +1628,12 @@ class SupabaseService {
       final startDate = DateTime.now();
       final endDate = challenge.endDate;
 
-      // If it's a premium challenge, spend coins
+      // If it's a premium challenge, spend coins (must succeed before join)
       if (challenge.isPremium && challenge.coinsCost > 0) {
-        await spendCoins(challenge.coinsCost.toDouble());
+        final spent = await spendCoins(challenge.coinsCost.toDouble());
+        if (!spent) {
+          throw Exception('Not enough coins to join this premium challenge');
+        }
       }
 
       // Insert or reset (upsert) into user_challenges. This allows re-join after leaving
@@ -1550,65 +1673,37 @@ class SupabaseService {
     }
   }
 
-  // Update challenge progress
+  // Progress display only — completion/rewards are server-side via
+  // evaluate_challenges_for_user → complete_challenge. Never mint coins here.
   Future<UserChallengeModel> updateChallengeProgress(
       String challengeId, int progress) async {
     try {
       if (currentUser == null) throw Exception('User not authenticated');
 
-      // Find the user challenge record
       final userChallengeResponse = await client
           .from('user_challenges')
           .select('*, challenges(*)')
           .eq('user_id', currentUser!.id)
           .eq('challenge_id', challengeId)
+          .neq('status', 'abandoned')
           .single();
 
-      // Check if the challenge is already completed
       if (userChallengeResponse['is_completed'] == true) {
         throw Exception('Challenge already completed');
       }
 
-      // Update the progress
-      final updateData = {
-        'progress': progress,
-        'updated_at': DateTime.now().toIso8601String(),
-      };
-
-      // Check if challenge is completed now
-      if (progress >= 100) {
-        updateData['is_completed'] = true;
-        updateData['completion_date'] = DateTime.now().toIso8601String();
-      }
-
+      // Cap progress updates; do NOT set is_completed or award coins.
+      final safeProgress = progress.clamp(0, 99);
       final response = await client
           .from('user_challenges')
-          .update(updateData)
+          .update({
+            'progress': safeProgress,
+            'updated_at': DateTime.now().toIso8601String(),
+          })
           .eq('id', userChallengeResponse['id'])
           .select('*, challenges(*)')
           .single();
 
-      // Process reward if the challenge was just completed
-      if (progress >= 100 && userChallengeResponse['is_completed'] == false) {
-        // Get challenge details
-        final challengeData = response['challenges'] as Map<String, dynamic>;
-
-        // Add XP to user — ONLY for premium challenges (never for basic)
-        // Basic challenges reward users with coins only, never XP.
-        final challengeType = (challengeData['type'] as String?) ?? 'basic';
-        final xpReward = (challengeData['xp_reward'] as num?)?.toInt() ?? 0;
-        if (xpReward > 0 && challengeType != 'basic') {
-          await addXp(xpReward);
-        } else if (challengeType == 'basic') {
-          debugPrint('XP not awarded for basic challenge completion (by design)');
-        }
-
-        // Add coin reward
-        await addCoins(
-            (challengeData['coin_reward'] as num?)?.toDouble() ?? 50.0);
-      }
-
-      // Map to user challenge model
       final challengeData = response['challenges'] as Map<String, dynamic>;
       final challenge = ChallengeModel(
         id: challengeData['id'],
@@ -1635,7 +1730,7 @@ class SupabaseService {
         xpReward: (challengeData['xp_reward'] as num?)?.toInt() ?? 0,
       );
 
-      final userChallenge = UserChallengeModel(
+      return UserChallengeModel(
         id: response['id'],
         userId: response['user_id'],
         challengeId: challengeData['id'],
@@ -1650,9 +1745,6 @@ class SupabaseService {
             : null,
         progress: response['progress'] ?? 0,
       );
-
-      debugPrint('Challenge progress updated: ${challenge.title} - $progress%');
-      return userChallenge;
     } catch (e) {
       debugPrint('Error updating challenge progress: $e');
       rethrow;
@@ -1750,6 +1842,14 @@ class SupabaseService {
     }
   }
 
+  /// Whether the profile has security questions configured for password recovery.
+  static bool profileHasSecurityQuestions(Map<String, dynamic> data) {
+    // Check if security_question_1 column exists and is not null
+    // The database stores questions in security_question_1 and security_question_2
+    return data['security_question_1'] != null && 
+           data['security_question_1'].toString().trim().isNotEmpty;
+  }
+
   // Helper method to map Supabase response to UserModel
   UserModel _mapToUserModel(Map<String, dynamic> data, {bool isAdmin = false}) {
     return UserModel(
@@ -1774,6 +1874,19 @@ class SupabaseService {
       schoolId: data['school_id'],
       schoolName: data['school_name'],
       rank: null,
+      walletBalance: (data['wallet_balance'] as num?)?.toDouble() ?? 0.0,
+      walletStatus: UserModel.normalizeWalletStatus(
+        data['wallet_status'],
+        activatedAt: data['wallet_activated_at'] != null
+            ? DateTime.tryParse(data['wallet_activated_at'].toString())
+            : null,
+        balance: (data['wallet_balance'] as num?)?.toDouble() ?? 0,
+      ),
+      walletActivatedAt: data['wallet_activated_at'] != null
+          ? DateTime.tryParse(data['wallet_activated_at'].toString())
+          : null,
+      hasSecurityQuestions: profileHasSecurityQuestions(data),
+      gender: data['gender'] as String?,
     );
   }
 

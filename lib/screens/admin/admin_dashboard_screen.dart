@@ -4,15 +4,20 @@ import '../../models/challenge_model.dart';
 import '../../providers/user_provider.dart';
 import '../../providers/school_course_provider.dart';
 import '../../services/admin_service.dart';
+import '../../services/wallet_service.dart';
 import '../../theme/app_colors.dart';
 import 'challenge_form_screen.dart';
 import 'challenge_participants_screen.dart';
 import 'analytics_dashboard_screen.dart';
-import 'community_management_screen.dart';
 import 'maintenance_notice_screen.dart';
+import 'victory_wall_admin_screen.dart';
 import 'school_courses_admin_screen.dart';
 import 'school_leaderboards_screen.dart';
 import 'reward_disbursement_screen.dart';
+import 'lead_market_economy_screen.dart';
+import 'lead_market_fulfillment_screen.dart';
+import 'sponsors_management_screen.dart';
+import 'library_admin_screen.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   static const routeName = '/admin-dashboard';
@@ -24,16 +29,47 @@ class AdminDashboardScreen extends StatefulWidget {
 }
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+  final WalletService _walletService = WalletService();
+
   bool _isLoading = true;
   List<ChallengeModel> _challenges = [];
   bool _isLoadingMonthlyTop = true;
   List<Map<String, dynamic>> _monthlyTopUsers = [];
+  int _pendingRewardCount = 0;
+  int _pendingWithdrawalCount = 0;
+  bool _isLoadingWalletCounts = true;
 
   @override
   void initState() {
     super.initState();
     _loadChallenges();
     _loadMonthlyTopUsers();
+    _loadWalletPendingCounts();
+  }
+
+  Future<void> _loadWalletPendingCounts() async {
+    setState(() => _isLoadingWalletCounts = true);
+    try {
+      final results = await Future.wait([
+        _walletService.getPendingDisbursements(),
+        _walletService.getPendingWithdrawalsAdmin(),
+      ]);
+      final withdrawals = results[1] as List<Map<String, dynamic>>;
+      final actionableWithdrawals = withdrawals
+          .where((row) =>
+              row['status']?.toString() == 'pending_admin_approval' ||
+              row['status']?.toString() == 'approved')
+          .length;
+      if (!mounted) return;
+      setState(() {
+        _pendingRewardCount = results[0].length;
+        _pendingWithdrawalCount = actionableWithdrawals;
+        _isLoadingWalletCounts = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isLoadingWalletCounts = false);
+    }
   }
 
   Future<void> _loadMonthlyTopUsers() async {
@@ -183,12 +219,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             },
           ),
           IconButton(
-            icon: const Icon(Icons.groups),
-            tooltip: 'Community Management',
+            icon: const Icon(Icons.how_to_vote),
+            tooltip: 'Victory Wall Posts & Polls',
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (context) => const CommunityManagementScreen(),
+                  builder: (context) => const VictoryWallAdminScreen(),
                 ),
               );
             },
@@ -232,16 +268,25 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 await Future.wait([
                   _loadChallenges(),
                   _loadMonthlyTopUsers(),
+                  _loadWalletPendingCounts(),
                 ]);
               },
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
+                  _buildLeadWalletCard(),
+                  const SizedBox(height: 16),
                   _buildMonthlyTopUsersCard(),
                   const SizedBox(height: 16),
                   _buildSchoolLeaderboardsCard(),
                   const SizedBox(height: 16),
-                  _buildRewardDisbursementCard(),
+                  _buildLeadMarketFulfillmentCard(),
+                  const SizedBox(height: 16),
+                  _buildLeadMarketEconomyCard(),
+                  const SizedBox(height: 16),
+                  _buildSponsorsManagementCard(),
+                  const SizedBox(height: 16),
+                  _buildLibraryManagementCard(),
                   const SizedBox(height: 16),
                   if (_challenges.isEmpty)
                     Center(
@@ -498,7 +543,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'View top 3 students for every registered school',
+                    'View the monthly leaderboard for every school',
                     style: TextStyle(
                       fontSize: 13,
                       color: Colors.grey.shade600,
@@ -514,22 +559,43 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
-  Widget _buildRewardDisbursementCard() {
+  Widget _buildLeadWalletCard() {
+    final totalPending = _pendingRewardCount + _pendingWithdrawalCount;
+
     return InkWell(
       onTap: () {
-        Navigator.of(context).pushNamed('/admin-reward-disbursements');
+        final initialTab = _pendingWithdrawalCount > 0 && _pendingRewardCount == 0
+            ? 1
+            : 0;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => RewardDisbursementScreen(initialTabIndex: initialTab),
+          ),
+        );
       },
       borderRadius: BorderRadius.circular(16),
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
-          color: Colors.white,
-          border: Border.all(color: Colors.orange.withOpacity(0.3)),
+          gradient: LinearGradient(
+            colors: [
+              Colors.orange.shade50,
+              Colors.green.shade50,
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          border: Border.all(
+            color: totalPending > 0
+                ? Colors.orange.withOpacity(0.5)
+                : Colors.orange.withOpacity(0.25),
+            width: totalPending > 0 ? 2 : 1,
+          ),
           boxShadow: [
             BoxShadow(
-              color: Colors.orange.withOpacity(0.05),
-              blurRadius: 10,
+              color: Colors.orange.withOpacity(0.08),
+              blurRadius: 12,
               offset: const Offset(0, 4),
             ),
           ],
@@ -539,10 +605,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.orange.withOpacity(0.1),
+                color: Colors.white.withOpacity(0.8),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.account_balance_wallet, color: Colors.orange, size: 28),
+              child: const Icon(Icons.account_balance_wallet,
+                  color: Colors.orange, size: 28),
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -550,26 +617,274 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Reward Disbursements',
+                    'LeadWallet Payouts',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
-                      color: Colors.orange,
+                      color: Color(0xFF1A1A2E),
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Manage LeadWallet rewards and payouts',
+                    'Approve rewards and student bank withdrawals',
                     style: TextStyle(
                       fontSize: 13,
-                      color: Colors.grey.shade600,
+                      color: Colors.grey.shade700,
                     ),
                   ),
+                  if (!_isLoadingWalletCounts &&
+                      (_pendingRewardCount > 0 || _pendingWithdrawalCount > 0)) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        if (_pendingRewardCount > 0)
+                          _pendingChip(
+                            '$_pendingRewardCount reward${_pendingRewardCount == 1 ? '' : 's'}',
+                            Colors.orange,
+                          ),
+                        if (_pendingWithdrawalCount > 0)
+                          _pendingChip(
+                            '$_pendingWithdrawalCount withdrawal${_pendingWithdrawalCount == 1 ? '' : 's'}',
+                            Colors.green.shade700,
+                          ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
+            if (totalPending > 0 && !_isLoadingWalletCounts)
+              Container(
+                margin: const EdgeInsets.only(right: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.red,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '$totalPending',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
             const Icon(Icons.chevron_right, color: Colors.grey),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _pendingChip(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: color,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLeadMarketFulfillmentCard() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => const LeadMarketFulfillmentScreen(),
+            ),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF6366F1).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.storefront, color: Color(0xFF6366F1)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    Text(
+                      'Lead Market Fulfillment',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    SizedBox(height: 4),
+                    Text('Filter by school, verify orders, and track fulfilment'),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLeadMarketEconomyCard() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => const LeadMarketEconomyScreen(),
+            ),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: Colors.amber.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.monetization_on_rounded,
+                    color: Colors.amber),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Coin Economy (Lead Market)',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'Median balances, purchasing power, and dynamic pricing',
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSponsorsManagementCard() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => const SponsorsManagementScreen(),
+            ),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: Colors.teal.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.handshake_rounded, color: Colors.teal),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Sponsors (Lead Market)',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    SizedBox(height: 4),
+                    Text('Create sponsors and onboard sponsor dashboard users'),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLibraryManagementCard() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const LibraryAdminScreen()),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF6366F1).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.video_library_rounded,
+                    color: Color(0xFF6366F1)),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Digital Library',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    SizedBox(height: 4),
+                    Text(
+                        'Add, publish, and feature educational videos for the library tab'),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right),
+            ],
+          ),
         ),
       ),
     );

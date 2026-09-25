@@ -717,6 +717,62 @@ class MiniCourseQuizModel {
   }
 }
 
+/// Normalizes quiz answer keys from DB/AI into a 0-based option index.
+///
+/// `correctAnswerIndex` / `correctOptionIndex` are always 0-based (option A = 0).
+/// Legacy keys (`correctAnswer`, `correct_index`, letter codes) may be 1-based.
+int parseQuizCorrectAnswerIndex(
+  Map<String, dynamic> question,
+  List<String> options,
+) {
+  final optionCount = options.length;
+  if (optionCount == 0) return 0;
+
+  for (final key in ['correctAnswerIndex', 'correctOptionIndex']) {
+    if (!question.containsKey(key) || question[key] == null) continue;
+    final raw = question[key];
+    if (raw is num) {
+      final index = raw.toInt();
+      if (index >= 0 && index < optionCount) return index;
+    }
+    if (raw is String) {
+      final parsed = int.tryParse(raw.trim());
+      if (parsed != null && parsed >= 0 && parsed < optionCount) return parsed;
+    }
+  }
+
+  final raw = question['correctAnswer'] ??
+      question['correct_index'] ??
+      question['correctIndex'] ??
+      question['correct_option'] ??
+      question['correctOption'];
+
+  if (raw == null) return 0;
+
+  if (raw is String) {
+    final value = raw.trim().toUpperCase();
+    if (value.length == 1 &&
+        value.codeUnitAt(0) >= 65 &&
+        value.codeUnitAt(0) < 65 + optionCount) {
+      return value.codeUnitAt(0) - 65;
+    }
+    final parsed = int.tryParse(value);
+    if (parsed != null) {
+      if (parsed >= 1 && parsed <= optionCount) return parsed - 1;
+      if (parsed >= 0 && parsed < optionCount) return parsed;
+    }
+    return 0;
+  }
+
+  if (raw is num) {
+    final index = raw.toInt();
+    if (index >= 1 && index <= optionCount) return index - 1;
+    if (index >= 0 && index < optionCount) return index;
+  }
+
+  return 0;
+}
+
 class MiniCourseQuizQuestionModel {
   final String id;
   final String text; // Renamed from 'question' to match UI

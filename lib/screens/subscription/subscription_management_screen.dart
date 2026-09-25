@@ -28,37 +28,48 @@ class _SubscriptionManagementScreenState
   late UserProvider _userProvider;
 
   // Fallback plans used if none are returned from Supabase (e.g., empty seed or RLS)
-  // Prices and durations mirror the previous onboarding tier cards.
   static const List<Map<String, dynamic>> _fallbackPlans = [
     {
-      'id': 'basic_monthly',
-      'name': 'Basic',
-      'description': 'Great for getting started with MLQ basics.',
+      'id': '6ec0da9c-680e-4a99-a53f-27eeed192333',
+      'name': 'Monthly',
+      'description': 'Full MLQ access for 30 days.',
       'price': 2500, // ₦2,500 monthly
       'duration_days': 30,
       'features': {
+        'coins': 1000,
         'ai_coach': true,
-        'coins': 500,
-        'daily_goal_tracker': true,
-        'challenges': 'basic_only',
+        'mini_courses': true,
         'weekly_reports': true,
-        'courses_and_quiz': true,
-        'premium_checkmark': false,
+        'basic_challenges': true,
+        'premium_challenges': true,
+        'gratitude_journal': true,
+        'daily_goal_tracker': true,
+        'premium_checkmark': true,
+        'unlimited_challenges': true,
+        'communities': true,
+        'all_basic_features': true,
       },
       'is_active': true,
     },
     {
-      'id': 'premium_monthly',
-      'name': 'Premium',
-      'description': 'Unlock all premium challenges and advanced features.',
-      'price': 5000, // ₦5,000 monthly
-      'duration_days': 30,
+      'id': 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+      'name': 'Quarterly',
+      'description': 'Full MLQ access for 90 days — best value.',
+      'price': 7000, // ₦7,000 quarterly
+      'duration_days': 90,
       'features': {
-        'all_basic_features': true,
+        'coins': 3000,
+        'ai_coach': true,
+        'mini_courses': true,
+        'weekly_reports': true,
+        'basic_challenges': true,
+        'premium_challenges': true,
+        'gratitude_journal': true,
+        'daily_goal_tracker': true,
         'premium_checkmark': true,
-        'coins': 1100,
         'unlimited_challenges': true,
         'communities': true,
+        'all_basic_features': true,
       },
       'is_active': true,
     },
@@ -143,7 +154,7 @@ class _SubscriptionManagementScreenState
                         durationText = '$durationDays days';
                       }
 
-                      final isPopular = name.toLowerCase() == 'premium';
+                      final isPopular = name.toLowerCase() == 'quarterly';
 
                       return Container(
                         decoration: BoxDecoration(
@@ -252,6 +263,10 @@ class _SubscriptionManagementScreenState
       if (availablePlans.isEmpty) {
         availablePlans = List<Map<String, dynamic>>.from(_fallbackPlans);
       }
+      availablePlans = availablePlans
+          .where((plan) =>
+              (plan['name'] as String? ?? '').toLowerCase() != 'yearly')
+          .toList();
       final coinBalance = await _coinService.getUserCoins(userId);
 
       if (mounted) {
@@ -274,10 +289,10 @@ class _SubscriptionManagementScreenState
   @override
   Widget build(BuildContext context) {
     final userProvider = Provider.of<UserProvider>(context);
-    final bool isPremium = userProvider.user?.isPremium ?? false;
+    final bool isPremium = userProvider.hasPaidAccess;
 
     return Scaffold(
-      backgroundColor: Colors.grey[50],
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         title: Text(
           'Subscription Plans',
@@ -303,6 +318,18 @@ class _SubscriptionManagementScreenState
 
                     // Coin balance
                     _buildCoinBalanceCard(),
+                    const SizedBox(height: 16),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.card_giftcard_rounded),
+                      title: const Text('Invite & Earn'),
+                      subtitle: const Text(
+                        'Share your code — earn LeadWallet cash when friends subscribe',
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () =>
+                          Navigator.pushNamed(context, '/invite-earn'),
+                    ),
                     const SizedBox(height: 24),
 
                     // Available plans if not premium
@@ -433,9 +460,10 @@ class _SubscriptionManagementScreenState
     final plan = _activeSubscription!['subscription_plans'];
     final startDate = DateTime.parse(_activeSubscription!['start_date']);
     final endDate = DateTime.parse(_activeSubscription!['end_date']);
-    final isAutoRenew = _activeSubscription!['auto_renew'] ?? false;
+    final cancelledAt = _activeSubscription!['cancelled_at'];
 
     // Calculate days remaining
+    final totalDays = endDate.difference(startDate).inDays;
     final daysRemaining = endDate.difference(DateTime.now()).inDays;
 
     return Card(
@@ -451,9 +479,11 @@ class _SubscriptionManagementScreenState
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  'Current Plan: ${plan['name']}',
-                  style: AppTextStyles.heading3,
+                Flexible(
+                  child: Text(
+                    'Current Plan: ${plan['name']}',
+                    style: AppTextStyles.heading3,
+                  ),
                 ),
                 _buildStatusBadge(plan['name']),
               ],
@@ -464,17 +494,24 @@ class _SubscriptionManagementScreenState
               formatter.format(startDate),
             ),
             _buildInfoRow(
-              'Renewal Date',
+              'Expires On',
               formatter.format(endDate),
             ),
-            _buildInfoRow(
-              'Auto-Renewal',
-              isAutoRenew ? 'On' : 'Off',
+            if (cancelledAt != null)
+              _buildInfoRow(
+                'Status',
+                'Cancelled — access until expiry',
+              ),
+            const SizedBox(height: 8),
+            Text(
+              'Subscriptions do not auto-renew. Buy again before expiry to keep Premium.',
+              style: AppTextStyles.caption.copyWith(color: Colors.grey[600]),
             ),
             const SizedBox(height: 16),
             LinearProgressIndicator(
-              value:
-                  1 - (daysRemaining / (endDate.difference(startDate).inDays)),
+              value: totalDays <= 0
+                  ? 1.0
+                  : (1 - (daysRemaining / totalDays)).clamp(0.0, 1.0),
               backgroundColor: Colors.grey[300],
               valueColor: AlwaysStoppedAnimation<Color>(
                 daysRemaining < 7 ? Colors.orange : AppColors.primary,
@@ -486,36 +523,22 @@ class _SubscriptionManagementScreenState
               style: AppTextStyles.caption,
             ),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: QuestButton(
-                    text: isAutoRenew
-                        ? 'Turn Off Auto-Renewal'
-                        : 'Turn On Auto-Renewal',
-                    type: QuestButtonType.outline,
-                    onPressed: () async {
-                      // Toggle auto-renewal
-                      await _toggleAutoRenewal(
-                          _activeSubscription!['id'], !isAutoRenew);
-                    },
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: QuestButton(
-                    text: 'Cancel Subscription',
-                    type: QuestButtonType.outline,
-                    onPressed: () async {
-                      // Show confirmation dialog
-                      final confirmed = await _showCancellationDialog();
-                      if (confirmed == true) {
-                        await _cancelSubscription(_activeSubscription!['id']);
-                      }
-                    },
-                  ),
-                ),
-              ],
+            SizedBox(
+              width: double.infinity,
+              child: QuestButton(
+                text: cancelledAt != null
+                    ? 'Already Cancelled'
+                    : 'Cancel Subscription',
+                type: QuestButtonType.outline,
+                onPressed: cancelledAt != null
+                    ? null
+                    : () async {
+                        final confirmed = await _showCancellationDialog();
+                        if (confirmed == true) {
+                          await _cancelSubscription(_activeSubscription!['id']);
+                        }
+                      },
+              ),
             ),
           ],
         ),
@@ -661,19 +684,30 @@ class _SubscriptionManagementScreenState
 
   List<String> _getPlanFeatures(String planName) {
     switch (planName.toLowerCase()) {
-      case 'basic':
+      case 'monthly':
         return [
-          '500 coins per month',
-          'Basic challenges access',
+          '1000 coins included',
+          'Full challenges access',
           'Leadership mini courses',
-        ];
-      case 'premium':
-        return [
-          'Premium subscription qualifies for rewards',
-          '1000 coins per month',
-          'Unlimited premium challenges',
-          'Leadership mini courses',
+          'AI Coach',
           'Premium checkmark badge',
+        ];
+      case 'quarterly':
+        return [
+          '3000 coins included',
+          'Full challenges access',
+          'Leadership mini courses',
+          'AI Coach',
+          'Premium checkmark badge',
+          'Best value — 90 days',
+        ];
+      case 'basic':
+      case 'premium':
+        // Legacy plan names still shown for existing subscribers
+        return [
+          'Full MLQ access',
+          'Challenges & mini courses',
+          'Premium features',
         ];
       default:
         return [
@@ -684,7 +718,12 @@ class _SubscriptionManagementScreenState
   }
 
   List<Widget> _buildAvailablePlansCards() {
-    return _availablePlans.where((plan) => plan['name'] != 'Trial').map((plan) {
+    return _availablePlans
+        .where((plan) {
+          final name = (plan['name'] as String? ?? '').toLowerCase();
+          return name != 'trial' && name != 'yearly';
+        })
+        .map((plan) {
       final features = plan['features'] ?? {};
       final price = plan['price'] ?? 0;
       final durationDays = plan['duration_days'] ?? 30;
@@ -701,7 +740,7 @@ class _SubscriptionManagementScreenState
         durationText = '$durationDays days';
       }
 
-      final isPopular = plan['name'].toLowerCase() == 'premium';
+      final isPopular = plan['name'].toLowerCase() == 'quarterly';
 
       return Container(
         margin: const EdgeInsets.only(bottom: 20),
@@ -1002,14 +1041,4 @@ class _SubscriptionManagementScreenState
     }
   }
 
-  Future<void> _toggleAutoRenewal(String subscriptionId, bool autoRenew) async {
-    // To be implemented with Supabase
-    // This is a placeholder for now
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Auto-renewal ${autoRenew ? 'enabled' : 'disabled'}'),
-        backgroundColor: Colors.green,
-      ),
-    );
-  }
 }

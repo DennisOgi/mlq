@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:provider/provider.dart';
 import '../../../constants/app_constants.dart';
+import '../../../providers/user_provider.dart';
 import '../../../widgets/quest_button.dart';
-import '../../auth/login_screen.dart';
 import '../../legal/legal_markdown_screen.dart';
 
 class PersonalInfoPage extends StatelessWidget {
@@ -316,9 +317,9 @@ class PersonalInfoPage extends StatelessWidget {
                   ),
                   TextButton(
                     onPressed: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const LoginScreen()),
-                      );
+                      context
+                          .read<UserProvider>()
+                          .showLoginInsteadOfOnboarding();
                     },
                     child: Text(
                       'Log in',

@@ -8,10 +8,12 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'supabase_service.dart';
 import 'push_notification_platform.dart';
+import 'notification_navigation.dart';
 
 class PushNotificationService {
   PushNotificationService._();
@@ -60,6 +62,14 @@ class PushNotificationService {
     // App opened from notification (mobile only)
     if (onMessageOpenedApp != null) {
       _platform.onMessageOpenedApp(onMessageOpenedApp);
+
+      // Cold start: defer until navigator is ready
+      final initialMessage = await _platform.getInitialMessage();
+      if (initialMessage != null) {
+        NotificationNavigation.setPending(
+          NotificationNavigation.dataFromMessage(initialMessage),
+        );
+      }
     }
 
     _initialized = true;
@@ -68,24 +78,29 @@ class PushNotificationService {
   // Schedule a single daily goal reminder at the user's preferred local time.
   Future<void> scheduleDailyGoalReminder({
     required TimeOfDay time,
-    String? timezone, // unused now; kept for API compatibility
+    String? timezone,
     String title = 'Set Your Daily Goals',
     String body = 'Hey! Don\'t forget to set your goals for today! 🎯',
   }) async {
     await _ensureTimezoneInitialized();
 
-    // If a specific timezone is provided, try to set it for this schedule only.
+    final tzName = timezone ?? await _localTimezoneName();
+    final location = tz.getLocation(tzName);
+
     tz.TZDateTime nextInstance() {
-      // We schedule in UTC to avoid requiring platform timezone. Convert the user's selected
-      // local time to a UTC wall-clock time for the next occurrence.
-      final nowLocal = DateTime.now();
-      var scheduledLocal = DateTime(
-          nowLocal.year, nowLocal.month, nowLocal.day, time.hour, time.minute);
-      if (scheduledLocal.isBefore(nowLocal)) {
-        scheduledLocal = scheduledLocal.add(const Duration(days: 1));
+      final now = tz.TZDateTime.now(location);
+      var scheduled = tz.TZDateTime(
+        location,
+        now.year,
+        now.month,
+        now.day,
+        time.hour,
+        time.minute,
+      );
+      if (scheduled.isBefore(now)) {
+        scheduled = scheduled.add(const Duration(days: 1));
       }
-      final scheduledUtc = scheduledLocal.toUtc();
-      return tz.TZDateTime.from(scheduledUtc, tz.getLocation('UTC'));
+      return scheduled;
     }
 
     const androidDetails = AndroidNotificationDetails(
@@ -170,6 +185,7 @@ class PushNotificationService {
 
       await SupabaseService.instance.client.from('profiles').update({
         'fcm_token': token,
+        'timezone': await _localTimezoneName(),
         'updated_at': DateTime.now().toIso8601String()
       }).eq('id', user.id);
 
@@ -226,6 +242,7 @@ class PushNotificationService {
 
       await SupabaseService.instance.client.from('profiles').update({
         'fcm_token': token,
+        'timezone': await _localTimezoneName(),
         'updated_at': DateTime.now().toIso8601String()
       }).eq('id', user.id);
 
@@ -249,11 +266,19 @@ class PushNotificationService {
   /// Check if FCM token is synced for current user
   bool get isTokenSynced => _tokenSynced;
 
-  /// Clear token sync state (call on logout)
-  Future<void> clearTokenState() async {
+  /// Clear token sync state (call on logout, before signOut)
+  Future<void> clearTokenState({bool clearServerToken = true}) async {
     _tokenSynced = false;
     _lastSyncedToken = null;
     try {
+      final userId = SupabaseService.instance.currentUser?.id;
+      if (clearServerToken && userId != null) {
+        await SupabaseService.instance.client.from('profiles').update({
+          'fcm_token': null,
+          'updated_at': DateTime.now().toIso8601String(),
+        }).eq('id', userId);
+      }
+
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_fcmTokenValueKey);
       await prefs.remove('${_fcmTokenKey}_user_id');
@@ -271,20 +296,34 @@ class PushNotificationService {
         InitializationSettings(android: androidInit, iOS: iosInit);
     await _fln.initialize(initSettings,
         onDidReceiveNotificationResponse: (NotificationResponse response) {
-      // Handle notification tap for local notifications
+      final payload = response.payload;
+      if (payload == null || payload.isEmpty) return;
+      try {
+        final data = Map<String, dynamic>.from(jsonDecode(payload) as Map);
+        NotificationNavigation.handleTap(data);
+      } catch (e) {
+        debugPrint('[PushNotificationService] Local tap parse error: $e');
+      }
     });
+  }
+
+  Future<String> _localTimezoneName() async {
+    final info = await FlutterTimezone.getLocalTimezone();
+    return info.identifier;
   }
 
   Future<void> _ensureTimezoneInitialized() async {
     if (_tzInitialized) return;
     try {
-      // Initialize timezone database and default to UTC. We avoid querying platform timezone
-      // to remove dependency issues and ensure stable scheduling.
       tzdata.initializeTimeZones();
-      tz.setLocalLocation(tz.getLocation('UTC'));
+      final tzName = await _localTimezoneName();
+      tz.setLocalLocation(tz.getLocation(tzName));
       _tzInitialized = true;
     } catch (_) {
-      // If even UTC fails, keep _tzInitialized false; scheduling will no-op.
+      try {
+        tz.setLocalLocation(tz.getLocation('UTC'));
+        _tzInitialized = true;
+      } catch (_) {}
     }
   }
 

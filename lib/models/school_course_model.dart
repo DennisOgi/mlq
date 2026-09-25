@@ -1,4 +1,6 @@
 /// Represents a school-specific mini course
+import 'mini_course_model.dart';
+
 class SchoolCourse {
   final String id;
   final String schoolId;
@@ -333,10 +335,11 @@ class QuizQuestion {
   });
 
   factory QuizQuestion.fromJson(Map<String, dynamic> json) {
+    final options = List<String>.from(json['options'] ?? []);
     return QuizQuestion(
       question: json['question'] as String? ?? '',
-      options: List<String>.from(json['options'] ?? []),
-      correctIndex: json['correct_index'] as int? ?? 0,
+      options: options,
+      correctIndex: parseQuizCorrectAnswerIndex(json, options),
       explanation: json['explanation'] as String?,
     );
   }

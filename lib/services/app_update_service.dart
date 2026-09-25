@@ -1,7 +1,8 @@
+import 'dart:async';
 import 'dart:io';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:in_app_update/in_app_update.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Service to handle automatic app updates from Play Store
 /// Uses Google's In-App Updates API for seamless update experience
@@ -9,112 +10,148 @@ class AppUpdateService {
   AppUpdateService._();
   static final AppUpdateService instance = AppUpdateService._();
 
+  /// Startup Play Store update prompts (enabled for release builds).
+  /// Override with `--dart-define=MLQ_ENABLE_STARTUP_UPDATE_CHECK=false` to disable.
+  static const bool _startupUpdatePromptEnabled = bool.fromEnvironment(
+    'MLQ_ENABLE_STARTUP_UPDATE_CHECK',
+    defaultValue: true,
+  );
+  static const String _diagnosticLogKey = 'mlq_app_update_diagnostic_logs';
+
   bool _updateAvailable = false;
   AppUpdateInfo? _updateInfo;
 
   bool get updateAvailable => _updateAvailable;
   AppUpdateInfo? get updateInfo => _updateInfo;
 
+  Future<void> _log(String message) async {
+    final line = '${DateTime.now().toIso8601String()} $message';
+    debugPrint('[AppUpdateService] $message');
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final existing = prefs.getStringList(_diagnosticLogKey) ?? const [];
+      final next = [...existing, line];
+      await prefs.setStringList(
+        _diagnosticLogKey,
+        next.length > 40 ? next.sublist(next.length - 40) : next,
+      );
+    } catch (e) {
+      debugPrint('[AppUpdateService] Failed to persist diagnostic log: $e');
+    }
+  }
+
   /// Check for available updates from Play Store
   /// Returns true if an update is available
   Future<bool> checkForUpdate() async {
     // Only works on Android
     if (!Platform.isAndroid) {
-      debugPrint('[AppUpdateService] In-app updates only available on Android');
+      await _log('In-app updates only available on Android');
       return false;
     }
 
     try {
+      await _log('Checking Play in-app update availability');
       _updateInfo = await InAppUpdate.checkForUpdate();
-      _updateAvailable = _updateInfo?.updateAvailability == 
-          UpdateAvailability.updateAvailable;
-      
-      debugPrint('[AppUpdateService] Update check result:');
-      debugPrint('  - Update available: $_updateAvailable');
-      debugPrint('  - Available version code: ${_updateInfo?.availableVersionCode}');
-      debugPrint('  - Update priority: ${_updateInfo?.updatePriority}');
-      debugPrint('  - Staleness days: ${_updateInfo?.clientVersionStalenessDays}');
-      
+      _updateAvailable =
+          _updateInfo?.updateAvailability == UpdateAvailability.updateAvailable;
+
+      await _log(
+        'Update check result: available=$_updateAvailable, '
+        'availableVersionCode=${_updateInfo?.availableVersionCode}, '
+        'priority=${_updateInfo?.updatePriority}, '
+        'stalenessDays=${_updateInfo?.clientVersionStalenessDays}, '
+        'flexibleAllowed=${_updateInfo?.flexibleUpdateAllowed}, '
+        'immediateAllowed=${_updateInfo?.immediateUpdateAllowed}',
+      );
+
       return _updateAvailable;
     } catch (e) {
-      debugPrint('[AppUpdateService] ❌ Error checking for update: $e');
+      await _log('Error checking for update: $e');
       return false;
     }
   }
 
+  /// Prefer immediate when allowed, otherwise flexible (and the reverse as fallback).
+  Future<void> _startBestAvailableUpdate({
+    required bool preferImmediate,
+    VoidCallback? onFlexibleDownloadComplete,
+  }) async {
+    final immediateAllowed = _updateInfo?.immediateUpdateAllowed == true;
+    final flexibleAllowed = _updateInfo?.flexibleUpdateAllowed == true;
+
+    if (preferImmediate && immediateAllowed) {
+      await startImmediateUpdate();
+      return;
+    }
+    if (flexibleAllowed) {
+      await startFlexibleUpdate(onDownloadComplete: onFlexibleDownloadComplete);
+      return;
+    }
+    if (immediateAllowed) {
+      await startImmediateUpdate();
+      return;
+    }
+    await _log('No in-app update path allowed (immediate/flexible both blocked)');
+  }
+
   /// Start a flexible update (downloads in background, user can continue using app)
-  /// Shows a snackbar when download completes, user can choose when to install
   Future<void> startFlexibleUpdate({
     VoidCallback? onDownloadComplete,
   }) async {
     if (!Platform.isAndroid || !_updateAvailable) {
-      debugPrint('[AppUpdateService] Cannot start flexible update - not available');
+      await _log('Cannot start flexible update - not available');
       return;
     }
 
     try {
-      // Check if flexible update is allowed
       if (_updateInfo?.flexibleUpdateAllowed != true) {
-        debugPrint('[AppUpdateService] Flexible update not allowed, trying immediate');
-        await startImmediateUpdate();
+        await _log('Flexible update not allowed');
         return;
       }
 
-      debugPrint('[AppUpdateService] Starting flexible update...');
-      
-      // Start the flexible update
-      await InAppUpdate.startFlexibleUpdate();
-      
-      debugPrint('[AppUpdateService] ✅ Flexible update started');
-      
-      // Listen for download completion
-      InAppUpdate.completeFlexibleUpdate().then((_) {
-        debugPrint('[AppUpdateService] ✅ Flexible update completed');
+      await _log('Starting flexible update download');
+      final result = await InAppUpdate.startFlexibleUpdate();
+      await _log('Flexible update finished with result=$result');
+      if (result == AppUpdateResult.success) {
         onDownloadComplete?.call();
-      }).catchError((e) {
-        debugPrint('[AppUpdateService] Flexible update completion error: $e');
-      });
+      }
     } catch (e) {
-      debugPrint('[AppUpdateService] ❌ Error starting flexible update: $e');
+      await _log('Error starting flexible update: $e');
     }
   }
 
   /// Start an immediate update (blocks app until update is installed)
-  /// Use for critical updates that must be installed immediately
   Future<void> startImmediateUpdate() async {
     if (!Platform.isAndroid || !_updateAvailable) {
-      debugPrint('[AppUpdateService] Cannot start immediate update - not available');
+      await _log('Cannot start immediate update - not available');
       return;
     }
 
     try {
-      // Check if immediate update is allowed
       if (_updateInfo?.immediateUpdateAllowed != true) {
-        debugPrint('[AppUpdateService] Immediate update not allowed');
+        await _log('Immediate update not allowed');
         return;
       }
 
-      debugPrint('[AppUpdateService] Starting immediate update...');
-      
-      // This will block the app and show Play Store update UI
+      await _log('Starting immediate update');
       await InAppUpdate.performImmediateUpdate();
-      
-      debugPrint('[AppUpdateService] ✅ Immediate update completed');
+      await _log('Immediate update completed');
     } catch (e) {
-      debugPrint('[AppUpdateService] ❌ Error starting immediate update: $e');
+      await _log('Error starting immediate update: $e');
     }
   }
 
   /// Complete a flexible update that was downloaded in the background
-  /// Call this when user is ready to restart the app
   Future<void> completeFlexibleUpdate() async {
     if (!Platform.isAndroid) return;
 
     try {
+      await _log('Completing downloaded flexible update by user request');
       await InAppUpdate.completeFlexibleUpdate();
-      debugPrint('[AppUpdateService] ✅ Flexible update installation triggered');
+      await _log('Flexible update installation triggered');
     } catch (e) {
-      debugPrint('[AppUpdateService] ❌ Error completing flexible update: $e');
+      await _log('Error completing flexible update: $e');
     }
   }
 
@@ -183,48 +220,53 @@ class AppUpdateService {
     return result ?? false;
   }
 
+  void _showRestartSnackBar(BuildContext context) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Update downloaded! Restart to install.'),
+        duration: const Duration(seconds: 10),
+        action: SnackBarAction(
+          label: 'RESTART',
+          onPressed: () => completeFlexibleUpdate(),
+        ),
+      ),
+    );
+  }
+
   /// Check and prompt for update on app startup
-  /// This is the main method to call from your app initialization
   Future<void> checkAndPromptUpdate(BuildContext context) async {
+    if (!_startupUpdatePromptEnabled) {
+      await _log(
+        'Startup update prompt disabled; Play Store will handle app updates',
+      );
+      return;
+    }
+
     final hasUpdate = await checkForUpdate();
     if (!hasUpdate || !context.mounted) return;
 
-    // Determine if update should be required based on staleness
-    // If app is more than 14 days old, make it required
-    final isRequired = (_updateInfo?.clientVersionStalenessDays ?? 0) > 14;
-    
-    // Determine update type based on priority
-    // Priority 5 = critical (immediate), 0-4 = flexible
+    // Require update if the installed build has been stale for over a week.
+    final isRequired = (_updateInfo?.clientVersionStalenessDays ?? 0) > 7;
+
+    // Play Console in-app update priority: higher values prefer immediate path
     final priority = _updateInfo?.updatePriority ?? 0;
-    
-    if (priority >= 5 || isRequired) {
-      // Critical update - show dialog and do immediate update
+    final preferImmediate = priority >= 4 || isRequired;
+
+    if (preferImmediate) {
       final shouldUpdate = await showUpdateDialog(context, isRequired: true);
-      if (shouldUpdate) {
-        await startImmediateUpdate();
-      }
+      if (!shouldUpdate || !context.mounted) return;
+      await _startBestAvailableUpdate(
+        preferImmediate: true,
+        onFlexibleDownloadComplete: () => _showRestartSnackBar(context),
+      );
     } else {
-      // Non-critical update - show dialog and do flexible update
       final shouldUpdate = await showUpdateDialog(context);
-      if (shouldUpdate) {
-        await startFlexibleUpdate(
-          onDownloadComplete: () {
-            // Show snackbar when download completes
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text('Update downloaded! Restart to install.'),
-                  duration: const Duration(seconds: 10),
-                  action: SnackBarAction(
-                    label: 'RESTART',
-                    onPressed: () => completeFlexibleUpdate(),
-                  ),
-                ),
-              );
-            }
-          },
-        );
-      }
+      if (!shouldUpdate || !context.mounted) return;
+      await _startBestAvailableUpdate(
+        preferImmediate: false,
+        onFlexibleDownloadComplete: () => _showRestartSnackBar(context),
+      );
     }
   }
 }

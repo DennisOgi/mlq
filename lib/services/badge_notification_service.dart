@@ -95,10 +95,9 @@ class BadgeNotificationService {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  Image.asset(
-                    badge.imageAsset,
-                    height: 100,
-                    width: 100,
+                  BadgeImage(
+                    badge: badge,
+                    size: 100,
                   )
                   .animate()
                   .scale(

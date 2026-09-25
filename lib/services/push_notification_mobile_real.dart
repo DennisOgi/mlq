@@ -5,11 +5,7 @@ class PushNotificationMobile {
   final FirebaseMessaging _messaging = FirebaseMessaging.instance;
 
   Future<void> initialize() async {
-    await _messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
+    // Permission is requested by PushNotificationService._requestPermissions().
   }
 
   void onMessage(void Function(RemoteMessage) handler) {
@@ -18,6 +14,10 @@ class PushNotificationMobile {
 
   void onMessageOpenedApp(void Function(RemoteMessage) handler) {
     FirebaseMessaging.onMessageOpenedApp.listen(handler);
+  }
+
+  Future<RemoteMessage?> getInitialMessage() async {
+    return FirebaseMessaging.instance.getInitialMessage();
   }
 
   Future<String?> getToken() async {

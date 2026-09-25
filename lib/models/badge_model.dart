@@ -1,8 +1,9 @@
+import 'package:flutter/material.dart';
+
 enum BadgeType {
   goalNinja,
   challengeChampion,
   streakMaster,
-  helpfulHero,
   knowledgeSeeker,
   healthyHabitHero,
   socialButterfly,
@@ -34,8 +35,6 @@ class BadgeModel {
         return 'Challenge Champion';
       case BadgeType.streakMaster:
         return 'Streak Master';
-      case BadgeType.helpfulHero:
-        return 'Helpful Hero';
       case BadgeType.knowledgeSeeker:
         return 'Knowledge Seeker';
       case BadgeType.healthyHabitHero:
@@ -59,8 +58,6 @@ class BadgeModel {
         return 'assets/images/badges/rubybadge.png';
       case BadgeType.streakMaster:
         return 'assets/images/badges/sapphirebadge.png';
-      case BadgeType.helpfulHero:
-        return 'assets/images/badges/pearlbadge.png';
       case BadgeType.knowledgeSeeker:
         return 'assets/images/badges/topazbadge.png';
       case BadgeType.healthyHabitHero:
@@ -84,8 +81,6 @@ class BadgeModel {
         return 'Won 3 challenges';
       case BadgeType.streakMaster:
         return 'Maintained a 5-day streak';
-      case BadgeType.helpfulHero:
-        return 'Helped 3 friends with their goals';
       case BadgeType.knowledgeSeeker:
         return 'Completed 3 mini-courses';
       case BadgeType.healthyHabitHero:
@@ -98,6 +93,56 @@ class BadgeModel {
         return 'Had 10 conversations with Questor';
       case BadgeType.victoryVeteran:
         return 'Made 5 posts on the Victory Wall';
+    }
+  }
+
+  /// A Material icon used to render the badge when its image asset is missing.
+  /// The badge art (assets/images/badges/*.png) is not bundled, so every render
+  /// path falls back to these themed icons instead of a broken image.
+  IconData get fallbackIcon {
+    switch (type) {
+      case BadgeType.goalNinja:
+        return Icons.flag_rounded;
+      case BadgeType.challengeChampion:
+        return Icons.emoji_events_rounded;
+      case BadgeType.streakMaster:
+        return Icons.local_fire_department_rounded;
+      case BadgeType.knowledgeSeeker:
+        return Icons.menu_book_rounded;
+      case BadgeType.healthyHabitHero:
+        return Icons.favorite_rounded;
+      case BadgeType.socialButterfly:
+        return Icons.groups_rounded;
+      case BadgeType.academicAce:
+        return Icons.school_rounded;
+      case BadgeType.questorFriend:
+        return Icons.chat_bubble_rounded;
+      case BadgeType.victoryVeteran:
+        return Icons.military_tech_rounded;
+    }
+  }
+
+  /// Accent color used for the fallback badge medallion.
+  Color get accentColor {
+    switch (type) {
+      case BadgeType.goalNinja:
+        return const Color(0xFF2E7D32);
+      case BadgeType.challengeChampion:
+        return const Color(0xFFC62828);
+      case BadgeType.streakMaster:
+        return const Color(0xFF1565C0);
+      case BadgeType.knowledgeSeeker:
+        return const Color(0xFFF9A825);
+      case BadgeType.healthyHabitHero:
+        return const Color(0xFFAD1457);
+      case BadgeType.socialButterfly:
+        return const Color(0xFF6A1B9A);
+      case BadgeType.academicAce:
+        return const Color(0xFF455A64);
+      case BadgeType.questorFriend:
+        return const Color(0xFF00695C);
+      case BadgeType.victoryVeteran:
+        return const Color(0xFF4527A0);
     }
   }
 
@@ -162,5 +207,78 @@ class BadgeModel {
         earnedDate: now.subtract(const Duration(days: 2)),
       ),
     ];
+  }
+}
+
+/// Renders a badge's artwork, gracefully falling back to a themed medallion
+/// icon when the PNG asset is not bundled (which is currently always the case).
+/// Use this everywhere instead of `Image.asset(badge.imageAsset)` directly.
+class BadgeImage extends StatelessWidget {
+  final BadgeModel badge;
+
+  /// Fixed dimension for the badge. When null, the badge fills its parent's
+  /// constraints (used inside ClipRRect/avatar containers).
+  final double? size;
+  final BoxFit fit;
+
+  const BadgeImage({
+    super.key,
+    required this.badge,
+    this.size,
+    this.fit = BoxFit.contain,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.asset(
+      badge.imageAsset,
+      height: size,
+      width: size,
+      fit: fit,
+      errorBuilder: (context, error, stackTrace) => _fallback(),
+    );
+  }
+
+  Widget _fallback() {
+    final fixed = size;
+    if (fixed != null) return _medallion(fixed);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final shortest = constraints.biggest.shortestSide;
+        final dim = shortest.isFinite && shortest > 0 ? shortest : 64.0;
+        return _medallion(dim);
+      },
+    );
+  }
+
+  Widget _medallion(double dim) {
+    return Container(
+      height: dim,
+      width: dim,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            badge.accentColor,
+            Color.lerp(badge.accentColor, Colors.black, 0.25) ??
+                badge.accentColor,
+          ],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: badge.accentColor.withValues(alpha: 0.35),
+            blurRadius: dim * 0.12,
+            offset: Offset(0, dim * 0.05),
+          ),
+        ],
+      ),
+      child: Icon(
+        badge.fallbackIcon,
+        color: Colors.white,
+        size: dim * 0.5,
+      ),
+    );
   }
 }

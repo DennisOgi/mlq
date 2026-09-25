@@ -9,6 +9,7 @@ import '../../models/models.dart';
 import '../../providers/providers.dart';
 import '../../widgets/widgets.dart';
 import '../../widgets/victory_composer.dart';
+import '../../widgets/mlq_ui_primitives.dart';
 import '../../services/badge_service.dart';
 import '../../services/victory_wall_service.dart';
 import '../community/community_detail_screen.dart';
@@ -49,7 +50,6 @@ class _VictoryWallScreenState extends State<VictoryWallScreen> {
         _latestSeen = posts.map((p) => p.createdAt).reduce((a, b) => a.isAfter(b) ? a : b);
       }
       _syncVictoryPostCountAndCheckBadges();
-      context.read<CommunityProvider>().loadMyCommunities();
     });
     _pollTimer = Timer.periodic(const Duration(seconds: 60), (_) async {
       final provider = context.read<PostProvider>();
@@ -113,111 +113,117 @@ class _VictoryWallScreenState extends State<VictoryWallScreen> {
       });
     }
 
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text('Victory Wall', 
-            style: TextStyle(
-              color: Colors.white, 
-              fontSize: 24, 
-              fontFamily: AppTextStyles.heading2.fontFamily,
-              fontWeight: FontWeight.bold,
-            )
-          ),
-          backgroundColor: AppColors.primary,
-          elevation: 2,
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.refresh, color: Colors.white),
-              onPressed: () async {
-                await postProvider.refreshPosts();
-              },
-              tooltip: 'Refresh posts',
-            ),
-          ],
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(
-              bottom: Radius.circular(20),
+    final hasSchool = userProvider.user?.schoolId != null;
+    final scopes = [_Scope.all, _Scope.mine, if (hasSchool) _Scope.school];
+    final scopeIndex = scopes.indexOf(_scope).clamp(0, scopes.length - 1);
+
+    Widget pad(Widget child) => Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: child,
             ),
           ),
-          bottom: TabBar(
-            labelColor: Colors.white,
-            unselectedLabelColor: Colors.white.withOpacity(0.7),
-            indicatorColor: Colors.transparent,
-            dividerColor: Colors.transparent,
-            indicatorSize: TabBarIndicatorSize.label,
-            tabs: const [
-              Tab(text: 'Feed', icon: Icon(Icons.forum)),
-              Tab(text: 'Communities', icon: Icon(Icons.people_alt)),
-            ],
-          ),
-        ),
-        body: TabBarView(
-          children: [
-            RefreshIndicator(
+        );
+
+    return Scaffold(
+        backgroundColor: AppColors.background,
+        body: RefreshIndicator(
               onRefresh: () async {
                 await postProvider.refreshPosts();
                 return;
               },
-              color: AppColors.secondary,
-              backgroundColor: AppColors.background,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: AppColors.surface
-                ),
-                child: isLoading
-                    ? Center(child: CircularProgressIndicator(color: AppColors.secondary))
-                    : ListView.builder(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: AppColors.primary,
+              backgroundColor: AppColors.surface,
+              child: ListView.builder(
+                          padding: const EdgeInsets.only(bottom: 24),
                           physics: const AlwaysScrollableScrollPhysics(),
                           controller: _scrollController,
-                          itemCount: (visiblePosts.isEmpty ? 2 : visiblePosts.length + 2), // +2 for header and load more button
+                          itemCount: isLoading
+                              ? 2
+                              : (visiblePosts.isEmpty ? 2 : visiblePosts.length + 2), // +2 for header and load more button
                           itemBuilder: (context, index) {
                             if (index == 0) {
                               return Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  _buildHeaderChips(),
-                                  if (_hasNewPostsBanner) _buildNewPostsBanner(postProvider),
-                                  const VictoryComposer(),
+                                  MlqHeroHeader(
+                                    title: 'Victory',
+                                    highlight: 'Wall',
+                                    subtitle: 'Celebrate wins, big and small',
+                                    artAsset: AppAssets.questorExcited,
+                                    showBack: Navigator.of(context).canPop(),
+                                    action: Material(
+                                      color: Colors.white.withOpacity(0.12),
+                                      shape: const CircleBorder(),
+                                      child: IconButton(
+                                        tooltip: 'Refresh posts',
+                                        icon: const Icon(Icons.refresh_rounded,
+                                            color: Colors.white),
+                                        onPressed: () => postProvider.refreshPosts(),
+                                      ),
+                                    ),
+                                    bottom: MlqSegmentTabs(
+                                      labels: [
+                                        for (final s in scopes)
+                                          switch (s) {
+                                            _Scope.all => 'All',
+                                            _Scope.mine => 'My Posts',
+                                            _Scope.school => 'My School',
+                                          },
+                                      ],
+                                      selected: scopeIndex,
+                                      onDark: true,
+                                      onChanged: (i) =>
+                                          setState(() => _scope = scopes[i]),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  pad(const VictoryComposer()),
+                                  if (_hasNewPostsBanner) pad(_buildNewPostsBanner(postProvider)),
+                                  pad(_buildHeaderChips()),
                                 ],
+                              );
+                            }
+                            if (isLoading) {
+                              return const Padding(
+                                padding: EdgeInsets.only(top: 48),
+                                child: Center(
+                                  child: CircularProgressIndicator(
+                                      color: AppColors.primary),
+                                ),
                               );
                             }
                             // If there are no posts to show, render inline empty state below composer
                             if (visiblePosts.isEmpty && index == 1) {
-                              return _buildInlineEmptyState();
+                              return pad(_buildInlineEmptyState());
                             }
                             // Last item: Load more button
                             if (index == visiblePosts.length + 1) {
-                              return _buildLoadMoreButton(postProvider, hasMorePosts, isLoadingMore);
+                              return pad(_buildLoadMoreButton(postProvider, hasMorePosts, isLoadingMore));
                             }
                             
                             final post = visiblePosts[index - 1];
                             // Check if post is from the current user
                             final bool isCurrentUserPost = post.userId == userProvider.user?.id;
-                            return PostCard(
+                            return pad(PostCard(
                               post: post,
                               isCurrentUserPost: isCurrentUserPost,
                               onDelete: isCurrentUserPost ? () => _confirmDeletePost(context, post) : null,
-                            ).animate(delay: (50 * index).ms)
+                            ).animate(delay: (50 * index.clamp(0, 6)).ms)
                              .fadeIn(duration: 300.ms)
-                             .slideY(begin: 0.1, end: 0, duration: 300.ms, curve: Curves.easeOutQuad);
+                             .slideY(begin: 0.1, end: 0, duration: 300.ms, curve: Curves.easeOutQuad));
                           },
                         ),
-              ),
-            ),
-            _buildCommunitiesBody(context),
-          ],
         ),
-      ),
     );
   }
 
   Widget _buildCommunitiesBody(BuildContext context) {
     final communityProvider = Provider.of<CommunityProvider>(context);
     final userProvider = Provider.of<UserProvider>(context);
-    final isPremium = userProvider.user?.isPremium ?? false;
+    final isPremium = userProvider.hasPaidAccess;
     final communities = communityProvider.activeCommunities;
     final pendingInvites = communityProvider.pendingInvites;
 
@@ -1305,19 +1311,18 @@ class _VictoryWallScreenState extends State<VictoryWallScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         margin: const EdgeInsets.only(right: 8, bottom: 8),
         decoration: BoxDecoration(
-          color: selected ? AppColors.secondary.withOpacity(0.15) : AppColors.surface,
+          color: selected ? AppColors.primarySoft : AppColors.surface,
           borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(color: Colors.white.withOpacity(0.8), offset: const Offset(-2, -2), blurRadius: 4),
-            BoxShadow(color: Colors.black.withOpacity(0.06), offset: const Offset(2, 2), blurRadius: 4),
-          ],
-          border: Border.all(color: selected ? AppColors.secondary : Colors.transparent, width: 1.2),
+          border: Border.all(
+            color: selected ? AppColors.primary : AppColors.border,
+            width: 1.2,
+          ),
         ),
         child: Text(
           label,
           style: AppTextStyles.bodySmall.copyWith(
-            color: selected ? AppColors.secondary : AppColors.textPrimary,
-            fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+            color: selected ? AppColors.primary : AppColors.textSecondary,
+            fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
           ),
         ),
       ),
@@ -1326,11 +1331,8 @@ class _VictoryWallScreenState extends State<VictoryWallScreen> {
 
   // Header chips for scope and sort
   Widget _buildHeaderChips() {
-    final userProvider = Provider.of<UserProvider>(context);
-    final hasSchool = userProvider.user?.schoolId != null;
-
     return Padding(
-      padding: const EdgeInsets.only(top: 8.0, bottom: 12.0),
+      padding: const EdgeInsets.only(top: 8.0, bottom: 4.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1338,23 +1340,6 @@ class _VictoryWallScreenState extends State<VictoryWallScreen> {
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                _chip(
-                  label: 'All',
-                  selected: _scope == _Scope.all,
-                  onTap: () => setState(() => _scope = _Scope.all),
-                ),
-                _chip(
-                  label: 'My Posts',
-                  selected: _scope == _Scope.mine,
-                  onTap: () => setState(() => _scope = _Scope.mine),
-                ),
-                if (hasSchool)
-                  _chip(
-                    label: 'My School',
-                    selected: _scope == _Scope.school,
-                    onTap: () => setState(() => _scope = _Scope.school),
-                  ),
-                const SizedBox(width: 12),
                 _chip(
                   label: 'Newest',
                   selected: _sort == _Sort.newest,
@@ -1440,8 +1425,9 @@ class _VictoryWallScreenState extends State<VictoryWallScreen> {
                 icon: const Icon(Icons.expand_more),
                 label: const Text('Load More Posts'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.secondary,
-                  foregroundColor: Colors.white,
+                  backgroundColor: AppColors.primarySoft,
+                  foregroundColor: AppColors.primary,
+                  elevation: 0,
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(20),
@@ -1555,9 +1541,13 @@ class _VictoryWallScreenState extends State<VictoryWallScreen> {
   }
 
   void _showCreatePostDialog(BuildContext context) {
+    final userProvider = Provider.of<UserProvider>(context, listen: false);
+    if (!userProvider.hasPaidAccess) {
+      Navigator.pushNamed(context, '/subscription-management');
+      return;
+    }
     final TextEditingController contentController = TextEditingController();
     String? errorMessage;
-    final userProvider = Provider.of<UserProvider>(context, listen: false);
     final postProvider = Provider.of<PostProvider>(context, listen: false);
     final user = userProvider.user!;
     
@@ -1724,8 +1714,8 @@ class _VictoryWallScreenState extends State<VictoryWallScreen> {
                 ),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(60),
-                  child: Image.asset(
-                    badge.imageAsset,
+                  child: BadgeImage(
+                    badge: badge,
                     fit: BoxFit.cover,
                   ),
                 ),

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
@@ -5,10 +6,14 @@ import 'package:provider/provider.dart';
 import '../../constants/app_constants.dart';
 import '../../models/models.dart';
 import '../../providers/providers.dart';
+import '../../utils/course_visuals.dart';
 import 'mini_course_lesson_screen.dart';
 import 'mini_course_quiz_screen.dart';
 import '../../services/global_daily_courses_service.dart';
 import '../../providers/user_provider.dart';
+import '../../utils/entitlements.dart';
+import '../../widgets/feature_lock_card.dart';
+import '../../widgets/mlq_ui_primitives.dart';
 
 class MiniCourseDetailScreen extends StatelessWidget {
   final String courseId;
@@ -66,12 +71,17 @@ class MiniCourseDetailScreen extends StatelessWidget {
       final uid = userProvider.user?.id;
       if (uid == null || dateKey == null || dailyIndex == null) return false;
       try {
-        return await GlobalDailyCoursesService().isCompleted(
+        final locked = await GlobalDailyCoursesService().hasAttempted(
           userId: uid,
           courseDate: dateKey,
           courseIndex: dailyIndex,
         );
-      } catch (_) {
+        debugPrint(
+          '[MiniCourseDetail] lock check id=$id date=$dateKey index=$dailyIndex locked=$locked',
+        );
+        return locked;
+      } catch (e) {
+        debugPrint('[MiniCourseDetail] lock check failed: $e');
         return false;
       }
     }
@@ -80,268 +90,466 @@ class MiniCourseDetailScreen extends StatelessWidget {
     final topic = nonNullCourse.title.replaceAll('Mini-Course: ', '');
 
     // Get the color and icon based on the course topic
-    Color getCourseColor(String title) {
-      if (title.contains('Goal Setting')) return AppColors.primary;
-      if (title.contains('Leadership')) return AppColors.secondary;
-      if (title.contains('Teamwork')) return AppColors.tertiary;
-      if (title.contains('Communication')) return AppColors.accent1;
-      if (title.contains('Problem Solving')) return AppColors.accent2;
-      if (title.contains('Time Management')) return AppColors.social;
-      if (title.contains('Public Speaking')) return AppColors.health;
-      if (title.contains('Conflict Resolution')) return const Color(0xFF9C27B0);
-      if (title.contains('Critical Thinking')) return const Color(0xFF3F51B5);
-      if (title.contains('Emotional Intelligence')) return const Color(0xFFE91E63);
-      if (title.contains('Decision Making')) return const Color(0xFF009688);
-      if (title.contains('Creativity')) return const Color(0xFFFF5722);
-      return AppColors.primary;
-    }
-    
-    IconData getCourseIcon(String title) {
-      if (title.contains('Goal Setting')) return Icons.flag;
-      if (title.contains('Leadership')) return Icons.people;
-      if (title.contains('Teamwork')) return Icons.group_work;
-      if (title.contains('Communication')) return Icons.chat;
-      if (title.contains('Problem Solving')) return Icons.lightbulb;
-      if (title.contains('Time Management')) return Icons.schedule;
-      if (title.contains('Public Speaking')) return Icons.record_voice_over;
-      if (title.contains('Conflict Resolution')) return Icons.psychology;
-      if (title.contains('Critical Thinking')) return Icons.psychology_alt;
-      if (title.contains('Emotional Intelligence')) return Icons.favorite;
-      if (title.contains('Decision Making')) return Icons.how_to_vote;
-      if (title.contains('Creativity')) return Icons.brush;
-      return Icons.school;
-    }
-
-    final courseColor = getCourseColor(nonNullCourse.title);
-    final courseIcon = getCourseIcon(nonNullCourse.title);
+    final courseIcon = MlqCourseVisuals.iconFor(nonNullCourse.title);
     final attempted = miniCourseProvider.hasAttemptedQuiz(nonNullCourse.id);
 
+    if (!Entitlements.canUseMiniCourses(userProvider.user)) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Mini-Course')),
+        body: const Padding(
+          padding: EdgeInsets.all(24),
+          child: FeatureLockCard(
+            title: 'Mini-Courses',
+            description:
+                'Free accounts include mini-courses for 7 days. Subscribe to keep learning every day.',
+            icon: Icons.school_rounded,
+          ),
+        ),
+      );
+    }
+
+    final cover =
+        MlqCourseVisuals.courseCover(
+          nonNullCourse.id,
+          nonNullCourse.topic,
+          nonNullCourse.title,
+          gender: context.read<UserProvider>().user?.gender,
+        );
+
     return Scaffold(
-      appBar: AppBar(
-        title: Text(topic),
-        backgroundColor: courseColor,
-        foregroundColor: Colors.white,
-        elevation: 0,
-      ),
+      backgroundColor: AppColors.background,
       body: FutureBuilder<bool>(
         future: checkLocked(),
         builder: (context, snapshot) {
           final isLockedToday = snapshot.data == true;
-          return SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Course header
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: courseColor,
-                borderRadius: const BorderRadius.only(
-                  bottomLeft: Radius.circular(30),
+          final lessons = nonNullCourse.lessons;
+          final doneCount = lessons.where((l) => l.isCompleted).length;
+          final quizDone = nonNullCourse.quiz.isCompleted || attempted;
+          final allLessonsDone = nonNullCourse.allLessonsCompleted;
+          final nextIndex = lessons.indexWhere((l) => !l.isCompleted);
+
+          void openLesson(int index) {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => MiniCourseLessonScreen(
+                  courseId: nonNullCourse.id,
+                  lessonIndex: index,
                 ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  if (isLockedToday)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Colors.green.withOpacity(0.3),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: const [
-                          Icon(Icons.check_circle, color: Colors.white, size: 18),
-                          SizedBox(width: 6),
-                          Text('Completed today', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+            );
+          }
+
+          void openQuiz() {
+            if (!allLessonsDone) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Please complete all lessons first.'),
+                  backgroundColor: AppColors.primary,
+                ),
+              );
+              return;
+            }
+            if (isLockedToday || quizDone) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('You already passed this quiz today.'),
+                  backgroundColor: AppColors.primary,
+                ),
+              );
+              return;
+            }
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) =>
+                    MiniCourseQuizScreen(courseId: nonNullCourse.id),
+              ),
+            );
+          }
+
+          final String ctaLabel;
+          final VoidCallback? ctaAction;
+          if (quizDone || isLockedToday) {
+            ctaLabel = 'Completed today';
+            ctaAction = null;
+          } else if (!allLessonsDone && nextIndex >= 0) {
+            ctaLabel = doneCount == 0
+                ? 'Start lesson 1'
+                : 'Continue · lesson ${nextIndex + 1}';
+            ctaAction = () => openLesson(nextIndex);
+          } else {
+            ctaLabel = 'Take the quiz';
+            ctaAction = openQuiz;
+          }
+
+          return SingleChildScrollView(
+            padding: const EdgeInsets.only(bottom: 32),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _CoverHeader(
+                  cover: cover,
+                  icon: courseIcon,
+                  eyebrow: nonNullCourse.topic,
+                  title: topic,
+                ),
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 760),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (nonNullCourse.description.trim().isNotEmpty)
+                            Text(
+                              nonNullCourse.description,
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTextStyles.body.copyWith(
+                                color: AppColors.textSecondary,
+                                height: 1.45,
+                              ),
+                            ),
+                          const SizedBox(height: 14),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              MlqPill(
+                                label: '${lessons.length} lessons',
+                                icon: Icons.menu_book_rounded,
+                              ),
+                              MlqPill(
+                                label: 'Quiz · 5 coins',
+                                icon: Icons.monetization_on_rounded,
+                                background:
+                                    AppColors.secondary.withOpacity(0.3),
+                                foreground: AppColors.goldText,
+                              ),
+                              if (quizDone || isLockedToday)
+                                const MlqPill(
+                                  label: 'Completed today',
+                                  icon: Icons.check_rounded,
+                                  background: AppColors.success,
+                                  foreground: Colors.white,
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 18),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '$doneCount of ${lessons.length} lessons done',
+                                  style: AppTextStyles.caption.copyWith(
+                                    color: AppColors.textSecondary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          MlqProgressBar(
+                            value: lessons.isEmpty
+                                ? 0
+                                : doneCount / lessons.length,
+                          ),
+                          const SizedBox(height: 18),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 50,
+                            child: ElevatedButton(
+                              onPressed: ctaAction,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.secondary,
+                                foregroundColor: AppColors.textOnGold,
+                                disabledBackgroundColor: AppColors.primarySoft,
+                                disabledForegroundColor: AppColors.textSecondary,
+                                elevation: 0,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                              child: Text(
+                                ctaLabel,
+                                style: const TextStyle(
+                                  fontFamily: 'Nunito',
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 28),
+                          const MlqSectionHeader(
+                            title: 'Lessons',
+                            icon: Icons.format_list_numbered_rounded,
+                          ),
+                          const SizedBox(height: 12),
+                          for (var i = 0; i < lessons.length; i++)
+                            Builder(builder: (context) {
+                              final lesson = lessons[i];
+                              final isNext = !lesson.isCompleted &&
+                                  (i == 0 || lessons[i - 1].isCompleted);
+                              final isLocked = !lesson.isCompleted && !isNext;
+                              return _StepRow(
+                                number: '${i + 1}',
+                                title: lesson.title,
+                                subtitle: lesson.isCompleted
+                                    ? 'Done'
+                                    : isNext
+                                        ? 'Up next'
+                                        : 'Locked',
+                                state: lesson.isCompleted
+                                    ? _StepState.done
+                                    : isNext
+                                        ? _StepState.next
+                                        : _StepState.locked,
+                                onTap: isLocked ? null : () => openLesson(i),
+                              ).animate().fadeIn(
+                                    delay: (60 * i).ms,
+                                    duration: 300.ms,
+                                  );
+                            }),
+                          _StepRow(
+                            number: '',
+                            icon: Icons.emoji_events_rounded,
+                            title: 'Final quiz',
+                            subtitle: quizDone
+                                ? 'Passed today · cannot be retaken'
+                                : allLessonsDone
+                                    ? (isLockedToday
+                                        ? 'Already attempted today'
+                                        : 'Test yourself and earn 5 coins')
+                                    : 'Finish all lessons to unlock',
+                            state: quizDone
+                                ? _StepState.done
+                                : (allLessonsDone && !isLockedToday)
+                                    ? _StepState.next
+                                    : _StepState.locked,
+                            onTap: openQuiz,
+                          ),
                         ],
                       ),
                     ),
-                  // Show the course icon
-                  Icon(
-                    courseIcon,
-                    color: Colors.white,
-                    size: 60,
                   ),
-                  const SizedBox(height: 16),
-                  Text(
-                    topic,
-                    style: AppTextStyles.heading1.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    nonNullCourse.description,
-                    style: AppTextStyles.body.copyWith(
-                      color: Colors.white.withOpacity(0.9),
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _CoverHeader extends StatelessWidget {
+  final String? cover;
+  final IconData icon;
+  final String eyebrow;
+  final String title;
+
+  const _CoverHeader({
+    required this.cover,
+    required this.icon,
+    required this.eyebrow,
+    required this.title,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final top = MediaQuery.paddingOf(context).top;
+    final desktop = MediaQuery.sizeOf(context).width >= 900;
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(bottom: Radius.circular(28)),
+      child: SizedBox(
+        height: (desktop ? 320 : 220) + top,
+        width: double.infinity,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            MlqCoverImage(asset: cover, fallbackIcon: icon),
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  stops: [0, 0.4, 1],
+                  colors: [
+                    Color(0x66000000),
+                    Color(0x00000000),
+                    Color(0xE67A0270),
+                  ],
+                ),
               ),
             ),
-
-            // Course content
-            Padding(
-              padding: const EdgeInsets.all(16),
+            Positioned(
+              top: top + 6,
+              left: 8,
+              child: Material(
+                color: Colors.black.withOpacity(0.25),
+                shape: const CircleBorder(),
+                child: IconButton(
+                  icon: const Icon(Icons.arrow_back_rounded,
+                      color: Colors.white),
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 20,
+              right: 20,
+              bottom: 20,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Lessons section
                   Text(
-                    'Lessons',
-                    style: AppTextStyles.heading2,
+                    eyebrow.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTextStyles.caption.copyWith(
+                      color: AppColors.secondary,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1,
+                    ),
                   ),
-                  const SizedBox(height: 12),
-                  
-                  // Lesson list
-                  ...nonNullCourse.lessons.asMap().entries.map((entry) {
-                    final index = entry.key;
-                    final lesson = entry.value;
-                    final isCompleted = lesson.isCompleted;
-                    
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: ListTile(
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        leading: Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: isCompleted ? Colors.green : courseColor,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Center(
-                            child: isCompleted
-                                ? const Icon(Icons.check, color: Colors.white)
-                                : Text(
-                                    '${index + 1}',
-                                    style: AppTextStyles.bodyBold.copyWith(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                          ),
-                        ),
-                        title: Text(
-                          lesson.title,
-                          style: AppTextStyles.bodyBold,
-                        ),
-                        subtitle: Text(
-                          isCompleted ? 'Completed' : 'Tap to start',
-                          style: AppTextStyles.caption.copyWith(
-                            color: isCompleted ? Colors.green : AppColors.textSecondary,
-                          ),
-                        ),
-                        trailing: Icon(
-                          Icons.arrow_forward_ios,
-                          color: courseColor,
-                          size: 16,
-                        ),
-                        onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) => MiniCourseLessonScreen(
-                                courseId: nonNullCourse.id,
-                                lessonIndex: index,
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ).animate().fadeIn(duration: 500.ms, delay: Duration(milliseconds: 100 * index));
-                  }).toList(),
-
-                  const SizedBox(height: 24),
-
-                  // Quiz section
+                  const SizedBox(height: 4),
                   Text(
-                    'Final Quiz',
-                    style: AppTextStyles.heading2,
+                    title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontFamily: 'Poppins',
+                      fontSize: 24,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                      height: 1.2,
+                    ),
                   ),
-                  const SizedBox(height: 12),
-                  
-                  Card(
-                    elevation: 2,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                      leading: Container(
-                        width: 50,
-                        height: 50,
-                        decoration: BoxDecoration(
-                          color: (nonNullCourse.quiz.isCompleted || attempted)
-                              ? Colors.green 
-                              : nonNullCourse.allLessonsCompleted
-                                  ? (isLockedToday ? Colors.grey : courseColor)
-                                  : Colors.grey,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Center(
-                          child: (nonNullCourse.quiz.isCompleted || attempted)
-                              ? const Icon(Icons.check, color: Colors.white, size: 30)
-                              : const Icon(Icons.quiz, color: Colors.white, size: 30),
-                        ),
-                      ),
-                      title: Text(
-                        'Final Quiz',
-                        style: AppTextStyles.bodyBold.copyWith(
-                          color: nonNullCourse.allLessonsCompleted
-                              ? (isLockedToday ? Colors.grey : AppColors.textPrimary)
-                              : AppColors.textSecondary,
-                        ),
-                      ),
-                      subtitle: Text(
-                        (nonNullCourse.quiz.isCompleted || attempted)
-                            ? (isLockedToday ? 'Completed! Quiz cannot be retaken.' : 'Completed! Quiz cannot be retaken.')
-                            : nonNullCourse.allLessonsCompleted
-                                ? 'Test your knowledge and earn 5 coins!'
-                                : 'Complete all lessons to unlock',
-                        style: AppTextStyles.caption.copyWith(
-                          color: (nonNullCourse.quiz.isCompleted || attempted)
-                              ? (isLockedToday ? Colors.orange : Colors.green)
-                              : AppColors.textSecondary,
-                        ),
-                      ),
-                      trailing: nonNullCourse.allLessonsCompleted && !isLockedToday && !(nonNullCourse.quiz.isCompleted || attempted)
-                          ? Icon(
-                              Icons.arrow_forward_ios,
-                              color: courseColor,
-                              size: 16,
-                            )
-                          : null,
-                      onTap: nonNullCourse.allLessonsCompleted && !isLockedToday && !(nonNullCourse.quiz.isCompleted || attempted)
-                          ? () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) => MiniCourseQuizScreen(
-                                    courseId: nonNullCourse.id,
-                                  ),
-                                ),
-                              );
-                            }
-                          : null,
-                    ),
-                  ).animate().fadeIn(duration: 500.ms, delay: Duration(milliseconds: 100 * (nonNullCourse.lessons.length + 1))),
                 ],
               ),
             ),
           ],
         ),
-      );
-        },
+      ),
+    );
+  }
+}
+
+enum _StepState { done, next, locked }
+
+class _StepRow extends StatelessWidget {
+  final String number;
+  final IconData? icon;
+  final String title;
+  final String subtitle;
+  final _StepState state;
+  final VoidCallback? onTap;
+
+  const _StepRow({
+    required this.number,
+    this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.state,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color badgeBg;
+    final Widget badgeChild;
+    switch (state) {
+      case _StepState.done:
+        badgeBg = AppColors.success;
+        badgeChild =
+            const Icon(Icons.check_rounded, color: Colors.white, size: 20);
+        break;
+      case _StepState.next:
+        badgeBg = AppColors.secondary;
+        badgeChild = icon != null
+            ? Icon(icon, color: AppColors.textOnGold, size: 20)
+            : Text(
+                number,
+                style: const TextStyle(
+                  fontFamily: 'Nunito',
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.textOnGold,
+                ),
+              );
+        break;
+      case _StepState.locked:
+        badgeBg = AppColors.primarySoft;
+        badgeChild = const Icon(Icons.lock_rounded,
+            color: AppColors.textHint, size: 18);
+        break;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Material(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onTap,
+          child: Ink(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: state == _StepState.next
+                    ? AppColors.secondary
+                    : AppColors.border,
+                width: state == _StepState.next ? 1.5 : 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  alignment: Alignment.center,
+                  decoration:
+                      BoxDecoration(color: badgeBg, shape: BoxShape.circle),
+                  child: badgeChild,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyles.bodyBold.copyWith(
+                          color: state == _StepState.locked
+                              ? AppColors.textSecondary
+                              : AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        style: AppTextStyles.caption.copyWith(
+                          color: state == _StepState.done
+                              ? AppColors.success
+                              : AppColors.textSecondary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (onTap != null && state != _StepState.locked)
+                  const Icon(Icons.chevron_right_rounded,
+                      color: AppColors.primary),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

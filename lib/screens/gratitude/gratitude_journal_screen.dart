@@ -48,19 +48,24 @@ class _GratitudeJournalScreenState extends State<GratitudeJournalScreen> {
         mood: 'happy', // Default mood
       );
       
-      // Add entry and check if XP was awarded
-      final xpAwarded = await gratitudeProvider.addEntry(entry);
-      
-      // Award coins for gratitude entry (always award coins for UI feedback)
+      final isFirstEntryToday = await gratitudeProvider.addEntry(entry);
+
+      // Local coin feedback (server-side economy unchanged)
       userProvider.addCoins(2.0);
+
+      if (isFirstEntryToday) {
+        await userProvider.reinitializeUser();
+      }
 
       if (!mounted) return;
 
+      final rewardParts = <String>['+2 coins'];
+      if (isFirstEntryToday) {
+        rewardParts.add('+${GratitudeProvider.gratitudeXpReward} XP');
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(xpAwarded 
-            ? 'Gratitude entry saved! +2 coins +${GratitudeProvider.gratitudeXpReward} XP'
-            : 'Gratitude entry saved! +2 coins'),
+          content: Text('Gratitude entry saved! ${rewardParts.join(', ')}'),
           backgroundColor: AppColors.success,
         ),
       );
@@ -150,7 +155,9 @@ class _GratitudeJournalScreenState extends State<GratitudeJournalScreen> {
                               color: Colors.black,
                             ),
                           )
-                        : const Text('Add Entry (+2 coins)'),
+                        : Text(
+                            'Add Entry (+2 coins, +${GratitudeProvider.gratitudeXpReward} XP/day)',
+                          ),
                   ),
                 ),
               ],

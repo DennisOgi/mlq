@@ -16,7 +16,7 @@ class AiCourseGeneratorService {
   final Uuid _uuid = const Uuid();
   
   // Gemini API configuration
-  final String _apiUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent';
+  final String _apiUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent';
   String? _apiKey;
   
   // Simple client-side rate limiter to avoid 429s
@@ -28,20 +28,47 @@ class AiCourseGeneratorService {
   // Optional simple cache (by topic/age/difficulty) to avoid duplicate calls
   final Map<String, MiniCourseModel> _courseCache = {};
   
-  // Available topics for course generation
+  // Combined leadership + health topics (sync with mini_course_topic_pool.json)
   static const List<String> _availableTopics = [
-    'Goal Setting',
-    'Leadership Skills',
-    'Teamwork',
+    // Leadership
+    'Leadership',
+    'Personal Growth',
+    'Confidence',
     'Communication',
-    'Time Management',
-    'Problem Solving',
+    'Motivation',
     'Emotional Intelligence',
-    'Public Speaking',
-    'Decision Making',
-    'Conflict Resolution',
+    'Self-Discipline',
+    'Mindset',
+    'Productivity',
     'Creativity',
-    'Self-Confidence',
+    'Goal Setting',
+    'Decision Making',
+    'Resilience',
+    'Problem Solving',
+    'Influence',
+    'Time Management',
+    'Conflict Resolution',
+    'Teamwork & Collaboration',
+    // Health
+    'Water First',
+    'How Much Water Do I Need?',
+    'Signs You\'re Thirsty',
+    'Water vs Soda and Juice',
+    'Eat the Rainbow',
+    'Protein Power',
+    'Smart Snacks',
+    'Breakfast Wins',
+    'Sugar Check',
+    'Move Every Day',
+    'Posture Power',
+    'Screen Breaks',
+    'Sleep Equals Strength',
+    'Handwashing Like a Pro',
+    'Teeth and Smile Care',
+    'Rest and Reset',
+    'Breathe to Calm',
+    'Gratitude Journal',
+    'Faith and Health',
   ];
   
   /// Initialize with API key
@@ -168,18 +195,19 @@ Generate a leadership mini-course for kids aged $targetAge on the topic: "$topic
 
 Requirements:
 - Course should be appropriate for $difficultyLevel level
-- Target age: $targetAge years old
-- Focus on leadership development and personal growth
-- Use encouraging, age-appropriate language
-- Include practical examples kids can relate to
+- Target age: $targetAge years old (use simple words and short sentences)
+- Each lesson content: 60-90 words maximum — quick to read on a phone
+- Focus on school, friends, sports, homework, and family examples
+- NO adult business jargon, dating, violence, or scary content
+- Use encouraging, kid-friendly language
 
 Course Structure:
-1. Course Title: Creative and engaging title
-2. Course Description: 2-3 sentences explaining what kids will learn
-3. 4 Lessons: Each lesson should have:
+1. Course Title: Fun, kid-friendly title
+2. Course Description: One short sentence (under 20 words)
+3. 3 Lessons (not 4): Each lesson should have:
    - Lesson title
-   - Lesson content (2-3 paragraphs)
-   - 3 key takeaways
+   - Lesson content (60-90 words, 2-3 short paragraphs)
+   - 2-3 key takeaways (short phrases)
 4. Quiz: 5 multiple choice questions with:
    - Question text
    - 4 answer options
@@ -412,11 +440,13 @@ Generate the course content now:
       final List<MiniCourseQuizQuestionModel> questions = [];
       if (courseData['quiz'] != null && courseData['quiz']['questions'] != null) {
         for (final questionData in courseData['quiz']['questions']) {
+          final q = Map<String, dynamic>.from(questionData as Map);
+          final options = List<String>.from(q['options'] ?? []);
           questions.add(MiniCourseQuizQuestionModel(
             id: _uuid.v4(),
-            text: questionData['text'] ?? '',
-            options: List<String>.from(questionData['options'] ?? []),
-            correctAnswerIndex: questionData['correctAnswerIndex'] ?? 0,
+            text: q['text'] ?? q['question'] ?? '',
+            options: options,
+            correctAnswerIndex: parseQuizCorrectAnswerIndex(q, options),
             selectedOptionIndex: null,
           ));
         }

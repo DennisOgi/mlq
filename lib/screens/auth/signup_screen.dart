@@ -7,10 +7,16 @@ import '../../providers/providers.dart';
 import '../../widgets/widgets.dart';
 import '../../main.dart';
 import '../../services/subscription_service.dart';
+import '../../services/vas_session.dart';
+import '../../services/referral_service.dart';
+import '../vas/vas_portal_screen.dart';
 import 'login_screen.dart';
 
 class SignupScreen extends StatefulWidget {
-  const SignupScreen({super.key});
+  /// When true (telco/SMS portal), stay in the VAS shell after signup.
+  final bool returnToVas;
+
+  const SignupScreen({super.key, this.returnToVas = false});
 
   @override
   State<SignupScreen> createState() => _SignupScreenState();
@@ -24,6 +30,7 @@ class _SignupScreenState extends State<SignupScreen> {
   final _parentEmailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  final _inviteCodeController = TextEditingController();
 
   bool _isLoading = false;
   bool _obscurePassword = true;
@@ -58,7 +65,13 @@ class _SignupScreenState extends State<SignupScreen> {
       final userProvider = Provider.of<UserProvider>(context, listen: false);
       setState(() => _loadingSchools = true);
       await userProvider.loadSchools();
-      if (mounted) setState(() => _loadingSchools = false);
+      final pending = await ReferralService().getPendingCode();
+      if (mounted) {
+        if (pending != null && _inviteCodeController.text.isEmpty) {
+          _inviteCodeController.text = pending;
+        }
+        setState(() => _loadingSchools = false);
+      }
     });
   }
 
@@ -70,6 +83,7 @@ class _SignupScreenState extends State<SignupScreen> {
     _parentEmailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
+    _inviteCodeController.dispose();
     super.dispose();
   }
 
@@ -117,6 +131,11 @@ class _SignupScreenState extends State<SignupScreen> {
       final userProvider = Provider.of<UserProvider>(context, listen: false);
       final age = _calculateAge(_selectedBirthDate!);
 
+      final typedInvite = _inviteCodeController.text.trim();
+      if (typedInvite.isNotEmpty) {
+        await ReferralService().savePendingCode(typedInvite);
+      }
+
       await userProvider.completeOnboarding(
         name: _nameController.text.trim(),
         age: age,
@@ -128,29 +147,50 @@ class _SignupScreenState extends State<SignupScreen> {
         interests: _interests,
       );
 
-      // Grant 2-week free trial subscription
-      try {
-        final subscriptionService = SubscriptionService();
-        final userId = userProvider.user?.id;
-        if (userId != null) {
-          await subscriptionService.activateTrialSubscription(userId);
-          debugPrint('✅ Trial subscription granted to new user');
+      // Grant a 7-day Trial row for tracking. It does not unlock paid features.
+      // VAS/SMS portal users stay on the Goals+Gratitude+leaderboard tier
+      // until they upgrade to Monthly/Quarterly (or Phase 2 airtime entitlement).
+      if (!widget.returnToVas && !VasSession.isActive) {
+        try {
+          final subscriptionService = SubscriptionService();
+          final userId = userProvider.user?.id;
+          if (userId != null) {
+            await subscriptionService.activateTrialSubscription(userId);
+            await userProvider.refreshEntitlements();
+            debugPrint('✅ Trial subscription granted to new user');
+          }
+        } catch (e) {
+          debugPrint('⚠️ Failed to grant trial subscription: $e');
+          // Don't fail signup if trial creation fails
         }
-      } catch (e) {
-        debugPrint('⚠️ Failed to grant trial subscription: $e');
-        // Don't fail signup if trial creation fails
+      } else {
+        debugPrint('ℹ️ VAS signup — skipping full-app trial grant');
       }
 
-      // Auto-assign school by email domain (e.g., wellspring.org → Wellspring College)
+      // Retry attribution after profile/session have settled.
+      Map<String, dynamic>? inviteResult =
+          await ReferralService().tryApplyPendingCode();
+      if (typedInvite.isNotEmpty && inviteResult == null) {
+        // Pending was already consumed during onboarding — confirm outcome.
+        inviteResult = await ReferralService().applyCode(typedInvite);
+      }
+
+      // Auto-assign school by email domain (Wellspring / RCCG Gov Parish)
       try {
         final emailDomain =
             _emailController.text.trim().split('@').last.toLowerCase();
-        if (emailDomain == 'wellspring.org') {
-          // Ensure schools are loaded
+        String? schoolName;
+        if (emailDomain == 'wellspring.org' ||
+            emailDomain == 'wellspringcollege.org' ||
+            emailDomain.contains('wellspring')) {
+          schoolName = 'wellspring college';
+        } else if (emailDomain == 'rccg.com') {
+          schoolName = 'rccg gov parish';
+        }
+        if (schoolName != null) {
           await userProvider.loadSchools(force: true);
           final match = userProvider.schools.firstWhere(
-            (s) =>
-                (s['name'] as String?)?.toLowerCase() == 'wellspring college',
+            (s) => (s['name'] as String?)?.toLowerCase() == schoolName,
             orElse: () => {},
           );
           if (match.isNotEmpty) {
@@ -161,23 +201,67 @@ class _SignupScreenState extends State<SignupScreen> {
 
       if (!mounted) return;
 
-      // Show success animation before navigating
+      final toVas = widget.returnToVas || VasSession.isActive;
+      if (!toVas) {
+        await TrialWelcomeDialog.show(context, days: 7, force: true);
+      }
+
+      if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Welcome to My Leadership Quest, ${_nameController.text}!',
+            toVas
+                ? 'Welcome to My Leadership Quest, ${_nameController.text}!'
+                : 'Welcome to My Leadership Quest, ${_nameController.text}! Goals, Gratitude Jar, and 7 days of mini-courses are ready.',
             style: AppTextStyles.body.copyWith(color: Colors.white),
           ),
-          backgroundColor: AppColors.secondary,
-          duration: const Duration(seconds: 2),
+          backgroundColor: AppColors.primary,
+          duration: const Duration(seconds: 3),
         ),
       );
 
-      // Navigate to home screen after a short delay
-      Future.delayed(const Duration(seconds: 2), () {
+      if (typedInvite.isNotEmpty) {
+        final inviteErr = inviteResult?['error']?.toString();
+        final inviteOk = inviteResult?['success'] == true ||
+            inviteErr == 'already_attributed';
+        if (!inviteOk) {
+          final inviteMsg = switch (inviteErr) {
+            'self_referral' => 'You cannot use your own invite code.',
+            'invalid_or_inactive_code' ||
+            'invalid_code' =>
+              'That invite code is invalid. You can add one later in Invite & Earn.',
+            'profile_not_ready' =>
+              'Account is still setting up. Apply the invite code in Invite & Earn in a moment.',
+            _ =>
+              'Invite code could not be applied. You can retry in Invite & Earn.',
+          };
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                inviteMsg,
+                style: AppTextStyles.body.copyWith(color: Colors.white),
+              ),
+              backgroundColor: AppColors.error,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
+      }
+
+      // Navigate after a short delay
+      Future.delayed(const Duration(seconds: 2), () async {
+        if (!mounted) return;
+        if (toVas) {
+          await VasSession.enter(demo: VasSession.isDemo);
+        }
         if (!mounted) return;
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => const MainNavigationScreen()),
+          MaterialPageRoute(
+            builder: (context) => toVas
+                ? const VasPortalScreen()
+                : const MainNavigationScreen(),
+          ),
         );
       });
     } catch (e) {
@@ -204,18 +288,21 @@ class _SignupScreenState extends State<SignupScreen> {
 
   void _navigateToLogin() {
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (context) => const LoginScreen()),
+      MaterialPageRoute(
+        builder: (context) => LoginScreen(returnToVas: widget.returnToVas),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Form(
+      body: MlqAuthBackdrop(
+        child: SafeArea(
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Form(
               key: _formKey,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -246,7 +333,34 @@ class _SignupScreenState extends State<SignupScreen> {
                     style: AppTextStyles.body,
                     textAlign: TextAlign.center,
                   ).animate().fadeIn(duration: 600.ms, delay: 400.ms),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 16),
+                  if (!widget.returnToVas)
+                    Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: AppColors.primarySoft,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: AppColors.secondary.withValues(alpha: 0.45),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Image.asset(AppAssets.uiTrialGift, width: 52, height: 52),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'Free accounts include Goals, Gratitude Jar, the leaderboard, and 7 days of mini-courses. Subscribe to unlock the library, challenges, LeadWallet, and more.',
+                            style: AppTextStyles.bodySmall.copyWith(
+                              color: AppColors.textPrimary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ).animate().fadeIn(duration: 600.ms, delay: 450.ms),
+                  if (!widget.returnToVas) const SizedBox(height: 24),
 
                   // Error message if any
                   if (_errorMessage != null)
@@ -507,7 +621,23 @@ class _SignupScreenState extends State<SignupScreen> {
                   ).animate().fadeIn(duration: 600.ms, delay: 1300.ms),
                   const SizedBox(height: 32),
 
-                  // School selection removed: automatic assignment by domain during signup
+                  TextFormField(
+                    controller: _inviteCodeController,
+                    textCapitalization: TextCapitalization.characters,
+                    decoration: InputDecoration(
+                      labelText: 'Invite code (optional)',
+                      hintText: 'MLQ-XXXXXX',
+                      prefixIcon: const Icon(Icons.card_giftcard_rounded),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ).animate().fadeIn(duration: 600.ms, delay: 1350.ms),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Have a friend’s code? Enter it now so they can earn when you subscribe.',
+                    style: AppTextStyles.bodySmall,
+                  ),
                   const SizedBox(height: 24),
 
                   // Sign up button
@@ -542,6 +672,7 @@ class _SignupScreenState extends State<SignupScreen> {
               ),
             ),
           ),
+        ),
         ),
       ),
     );

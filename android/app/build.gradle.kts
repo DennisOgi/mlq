@@ -49,7 +49,7 @@ android {
     defaultConfig {
         applicationId = "com.mlq.my_leadership_quest"
         minSdk = 24  // Updated from flutter.minSdkVersion (23) to meet Flutter's upcoming requirement
-        targetSdk = 34
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         

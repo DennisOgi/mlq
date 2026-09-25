@@ -20,7 +20,6 @@ class GlobalDailyCoursesService {
           .maybeSingle();
 
       if (row == null) {
-        // Try to trigger generation once
         try {
           await _triggerGeneration();
         } catch (e) {
@@ -37,78 +36,120 @@ class GlobalDailyCoursesService {
         }
       }
 
-    final status = (row['status'] ?? 'ready').toString();
-    if (status == 'generating') {
-      await Future.delayed(const Duration(seconds: 2));
-      return getTodayCourses();
-    }
-    if (status == 'failed') {
-      throw Exception('Global course generation failed for $today');
-    }
+      final status = (row['status'] ?? 'ready').toString();
+      if (status == 'generating') {
+        await Future.delayed(const Duration(seconds: 2));
+        return getTodayCourses();
+      }
+      if (status == 'failed') {
+        throw Exception(
+          'MAINTENANCE: Today\'s mini-courses are temporarily unavailable while we fix an issue. Please check back later.',
+        );
+      }
 
       final coursesJson = (row['courses'] as List?) ?? const [];
+      if (coursesJson.length < 3) {
+        throw Exception(
+          'MAINTENANCE: Today\'s mini-courses are still being prepared. Please try again in a few minutes.',
+        );
+      }
+
       final List<MiniCourseModel> list = [];
       for (int i = 0; i < coursesJson.length; i++) {
         final cj = Map<String, dynamic>.from(coursesJson[i] as Map);
-        // Generate deterministic ID based on date and index (since server doesn't provide IDs)
-        final today = DateTime.now().toIso8601String().split('T').first;
         cj['id'] = '${today}_course_$i';
-        // Parse using existing serializer
         final model = SupabaseDailyCourseService.instance.courseFromJson(cj);
         list.add(model);
       }
       return list;
     } catch (e) {
       if (kDebugMode) debugPrint('[GlobalCourses] ❌ Error in getTodayCourses: $e');
-      rethrow; // Re-throw to let provider handle with specific error messages
+      rethrow;
     }
   }
 
-  /// Fetch today's 3 global courses AND hydrate each course's quiz completion state
-  /// from user_course_progress for the current authenticated user.
-  ///
-  /// This is critical because local caches are cleared on logout, and without hydration
-  /// the UI may allow retakes after login even though the server already recorded completion.
-  Future<List<MiniCourseModel>> getTodayCoursesForUser({
-    required String userId,
+  /// Courses from the previous [days] days, newest first, for read-only
+  /// review. Quizzes are not offered for these because the quiz RPC would
+  /// still grant rewards for past dates.
+  Future<List<({String date, MiniCourseModel course})>> getRecentPastCourses({
+    int days = 7,
   }) async {
-    final today = DateTime.now().toIso8601String().split('T').first;
-    final courses = await getTodayCourses();
+    final now = DateTime.now();
+    final today = now.toIso8601String().split('T').first;
+    final since = now
+        .subtract(Duration(days: days))
+        .toIso8601String()
+        .split('T')
+        .first;
+
+    final rows = await _supabase
+        .from('global_daily_courses')
+        .select('date, status, courses')
+        .lt('date', today)
+        .gte('date', since)
+        .order('date', ascending: false);
+
+    final out = <({String date, MiniCourseModel course})>[];
+    for (final r in (rows as List)) {
+      final row = Map<String, dynamic>.from(r as Map);
+      if ((row['status'] ?? 'ready').toString() != 'ready') continue;
+      final date = row['date'].toString();
+      final coursesJson = (row['courses'] as List?) ?? const [];
+      for (int i = 0; i < coursesJson.length; i++) {
+        try {
+          final cj = Map<String, dynamic>.from(coursesJson[i] as Map);
+          cj['id'] = '${date}_course_$i';
+          out.add((
+            date: date,
+            course: SupabaseDailyCourseService.instance.courseFromJson(cj),
+          ));
+        } catch (e) {
+          if (kDebugMode) debugPrint('[GlobalCourses] skip past course: $e');
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Apply pass-only completion flags. Failed/empty attempts stay retryable.
+  Future<List<MiniCourseModel>> hydrateCourseCompletion({
+    required List<MiniCourseModel> courses,
+    required String userId,
+    String? courseDate,
+  }) async {
+    final date = courseDate ?? DateTime.now().toIso8601String().split('T').first;
     try {
       final completion = await getCompletionMapForDate(
         userId: userId,
-        courseDate: today,
+        courseDate: date,
       );
-
-      if (completion.isEmpty) return courses;
 
       final List<MiniCourseModel> hydrated = [];
       for (int i = 0; i < courses.length; i++) {
         final c = courses[i];
         final row = completion[i];
-        if (row == null) {
-          hydrated.add(c);
-          continue;
-        }
-
-        final completed = row['completed'] == true;
-        final score = (row['score'] as num?)?.toInt();
-        if (!completed) {
-          hydrated.add(c);
-          continue;
-        }
-
-        final updatedQuiz = c.quiz.copyWith(
-          isCompleted: true,
-          score: score,
+        final completed = row?['completed'] == true;
+        final score = (row?['score'] as num?)?.toInt();
+        final passed = completed && (score ?? 0) >= 70;
+        debugPrint(
+          '[GlobalCourses] hydrate index=$i row=${row != null} '
+          'completed=$completed score=$score passed=$passed',
         );
         hydrated.add(c.copyWith(
-          quiz: updatedQuiz,
-          status: MiniCourseStatus.completed,
-          completedAt: DateTime.tryParse((row['completed_at'] ?? '').toString()),
+          quiz: c.quiz.copyWith(
+            isCompleted: passed,
+            score: passed ? score : null,
+          ),
+          status: passed
+              ? MiniCourseStatus.completed
+              : (c.status == MiniCourseStatus.completed
+                  ? MiniCourseStatus.notStarted
+                  : c.status),
+          completedAt: passed
+              ? DateTime.tryParse((row?['completed_at'] ?? '').toString())
+              : null,
         ));
       }
-
       return hydrated;
     } catch (e) {
       debugPrint('[GlobalCourses] ⚠️ Failed hydrating completion state: $e');
@@ -116,80 +157,77 @@ class GlobalDailyCoursesService {
     }
   }
 
-  /// Returns a map keyed by course_index -> { completed, score, completed_at } for a given date.
+  /// Fetch today's 3 global courses AND hydrate quiz completion from user_course_progress.
+  Future<List<MiniCourseModel>> getTodayCoursesForUser({
+    required String userId,
+  }) async {
+    final courses = await getTodayCourses();
+    return hydrateCourseCompletion(courses: courses, userId: userId);
+  }
+
   Future<Map<int, Map<String, dynamic>>> getCompletionMapForDate({
     required String userId,
     required String courseDate,
   }) async {
     final out = <int, Map<String, dynamic>>{};
-    try {
-      final rows = await _supabase
-          .from('user_course_progress')
-          .select('course_index, completed, score, completed_at')
-          .eq('user_id', userId)
-          .eq('course_date', courseDate);
+    final rows = await _supabase
+        .from('user_course_progress')
+        .select('course_index, completed, score, completed_at')
+        .eq('user_id', userId)
+        .eq('course_date', courseDate);
 
-      for (final r in (rows as List)) {
-        final m = Map<String, dynamic>.from(r as Map);
-        final idx = (m['course_index'] as num?)?.toInt();
-        if (idx == null) continue;
-        out[idx] = m;
-      }
-    } catch (e) {
-      debugPrint('[GlobalCourses] getCompletionMapForDate error: $e');
+    for (final r in (rows as List)) {
+      final m = Map<String, dynamic>.from(r as Map);
+      final idx = (m['course_index'] as num?)?.toInt();
+      if (idx == null) continue;
+      out[idx] = m;
     }
     return out;
   }
 
-  /// Mark a specific course (by date + index) as completed for a user securely.
-  /// Returns a map with reward info: { rewards_granted, coins_awarded, xp_awarded, new_coin_balance, new_xp }
-  Future<Map<String, dynamic>> markCompletedSecure({
+  /// Submit a quiz. Only a pass (>=70) is stored; fails stay retryable.
+  Future<Map<String, dynamic>> submitQuizSecure({
     required String userId,
     required String courseDate,
     required int courseIndex,
     required int score,
   }) async {
     try {
-      debugPrint('[GlobalCourses] Secure quiz completion: userId=$userId, date=$courseDate, index=$courseIndex, score=$score');
+      debugPrint(
+        '[GlobalCourses] Secure quiz submit: userId=$userId, date=$courseDate, index=$courseIndex, score=$score',
+      );
 
-      // Fast-path precheck to avoid calling the reward RPC when we already know it's completed.
-      // The RPC should still be idempotent, but this reduces load and UX confusion.
-      try {
-        final already = await isCompleted(
-          userId: userId,
-          courseDate: courseDate,
-          courseIndex: courseIndex,
-        );
-        if (already) {
-          return {
-            'rewards_granted': false,
-            'already_completed': true,
-            'coins_awarded': 0,
-            'xp_awarded': 0,
-          };
-        }
-      } catch (_) {}
-      
-      // Use secure RPC function that atomically checks and awards rewards
       final result = await _supabase.rpc('complete_quiz_secure', params: {
         'p_user_id': userId,
         'p_course_date': courseDate,
         'p_course_index': courseIndex,
         'p_score': score,
         'p_coin_reward': 5.0,
-        'p_xp_reward': 20,
       });
-      
+
       final resultMap = Map<String, dynamic>.from(result as Map);
-      debugPrint('[GlobalCourses] ✅ Secure completion result: $resultMap');
+      debugPrint('[GlobalCourses] ✅ Secure quiz submit result: $resultMap');
       return resultMap;
     } catch (e) {
-      debugPrint('[GlobalCourses] ❌ ERROR in secure quiz completion: $e');
+      debugPrint('[GlobalCourses] ❌ ERROR in secure quiz submit: $e');
       rethrow;
     }
   }
 
-  /// Legacy method - kept for backwards compatibility but prefer markCompletedSecure
+  Future<Map<String, dynamic>> markCompletedSecure({
+    required String userId,
+    required String courseDate,
+    required int courseIndex,
+    required int score,
+  }) async {
+    return submitQuizSecure(
+      userId: userId,
+      courseDate: courseDate,
+      courseIndex: courseIndex,
+      score: score,
+    );
+  }
+
   @Deprecated('Use markCompletedSecure instead for proper reward handling')
   Future<void> markCompleted({
     required String userId,
@@ -197,7 +235,6 @@ class GlobalDailyCoursesService {
     required int courseIndex,
     required int score,
   }) async {
-    // Delegate to secure version, ignore result
     await markCompletedSecure(
       userId: userId,
       courseDate: courseDate,
@@ -206,7 +243,6 @@ class GlobalDailyCoursesService {
     );
   }
 
-  /// Check completion quickly.
   Future<bool> isCompleted({
     required String userId,
     required String courseDate,
@@ -214,20 +250,40 @@ class GlobalDailyCoursesService {
   }) async {
     final res = await _supabase
         .from('user_course_progress')
-        .select('completed')
+        .select('completed, score')
         .eq('user_id', userId)
         .eq('course_date', courseDate)
         .eq('course_index', courseIndex)
         .maybeSingle();
-    return res?['completed'] == true;
-    
+    final completed = res?['completed'] == true;
+    final score = (res?['score'] as num?)?.toInt() ?? 0;
+    return completed && score >= 70;
+  }
+
+  /// True when this daily course was actually passed (not just opened/failed).
+  Future<bool> hasAttempted({
+    required String userId,
+    required String courseDate,
+    required int courseIndex,
+  }) async {
+    final res = await _supabase
+        .from('user_course_progress')
+        .select('id, completed, score')
+        .eq('user_id', userId)
+        .eq('course_date', courseDate)
+        .eq('course_index', courseIndex)
+        .maybeSingle();
+    final completed = res?['completed'] == true;
+    final score = (res?['score'] as num?)?.toInt() ?? 0;
+    final passed = completed && score >= 70;
+    debugPrint(
+      '[GlobalCourses] hasAttempted user=$userId date=$courseDate index=$courseIndex '
+      'row=${res != null} completed=$completed score=$score passed=$passed',
+    );
+    return passed;
   }
 
   Future<void> _triggerGeneration() async {
-    try {
-      await _supabase.functions.invoke('generate_global_daily_courses');
-    } catch (e) {
-      rethrow;
-    }
+    await _supabase.functions.invoke('generate_global_daily_courses');
   }
 }

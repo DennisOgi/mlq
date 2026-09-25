@@ -1,0 +1,70 @@
+[
+  {
+    "key": "leadership",
+    "path": "assets/images/ui/covers/leadership.webp",
+    "bytes": 232144,
+    "quality": 75
+  },
+  {
+    "key": "communication",
+    "path": "assets/images/ui/covers/communication.webp",
+    "bytes": 165094,
+    "quality": 85
+  },
+  {
+    "key": "mindset",
+    "path": "assets/images/ui/covers/mindset.webp",
+    "bytes": 211368,
+    "quality": 85
+  },
+  {
+    "key": "emotions",
+    "path": "assets/images/ui/covers/emotions.webp",
+    "bytes": 204720,
+    "quality": 85
+  },
+  {
+    "key": "resilience",
+    "path": "assets/images/ui/covers/resilience.webp",
+    "bytes": 215068,
+    "quality": 85
+  },
+  {
+    "key": "planning",
+    "path": "assets/images/ui/covers/planning.webp",
+    "bytes": 142676,
+    "quality": 85
+  },
+  {
+    "key": "thinking",
+    "path": "assets/images/ui/covers/thinking.webp",
+    "bytes": 207366,
+    "quality": 75
+  },
+  {
+    "key": "health",
+    "path": "assets/images/ui/covers/health.webp",
+    "bytes": 181786,
+    "quality": 85
+  },
+  {
+    "key": "goal_academic",
+    "path": "assets/images/ui/covers/goal_academic.webp",
+    "bytes": 151946,
+    "quality": 85
+  },
+  {
+    "key": "goal_social_boys",
+    "path": "assets/images/ui/covers/goal_social_boys.webp"
+  },
+  {
+    "key": "goal_social_girls",
+    "path": "assets/images/ui/covers/goal_social_girls.webp"
+  },
+  {
+    "key": "goal_health",
+    "path": "assets/images/ui/covers/goal_health.webp",
+    "bytes": 225472,
+    "quality": 85
+  }
+]

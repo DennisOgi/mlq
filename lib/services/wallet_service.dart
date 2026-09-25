@@ -1,26 +1,36 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:my_leadership_quest/models/user_model.dart';
 import 'package:my_leadership_quest/services/supabase_service.dart';
-import 'package:my_leadership_quest/services/bank_integration_service.dart';
 import 'package:my_leadership_quest/models/wallet_transaction_model.dart';
 import 'package:my_leadership_quest/models/savings_goal_model.dart';
 
 /// Service for all LeadWallet operations.
-/// Follows the singleton pattern established by CoinService.
-/// 
-/// ARCHITECTURE:
-/// This service now uses BankIntegrationService as the primary data source.
-/// Database serves as cache/backup for offline access.
-/// 
-/// CURRENT: Sandbox mode with mock bank integration
-/// FUTURE: Real bank API integration
+/// Internal Supabase ledger + Flutterwave payouts for withdrawals.
 class WalletService {
   static final WalletService _instance = WalletService._internal();
   factory WalletService() => _instance;
   WalletService._internal();
 
-  final SupabaseClient _client = SupabaseService().client;
-  final BankIntegrationService _bankService = BankIntegrationService();
+  // Lazy: hot restart / early route can construct this before Supabase init.
+  SupabaseClient get _client => SupabaseService().client;
+
+  /// Normalize wallet status from API/DB (handles stale cache and casing).
+  static String normalizeWalletStatus(
+    dynamic raw, {
+    DateTime? activatedAt,
+    double balance = 0,
+  }) =>
+      UserModel.normalizeWalletStatus(
+        raw,
+        activatedAt: activatedAt,
+        balance: balance,
+      );
+
+  static DateTime? _parseActivatedAt(dynamic raw) {
+    if (raw == null) return null;
+    return DateTime.tryParse(raw.toString());
+  }
 
   // ─── Balance & Status ───────────────────────────────────────────────
 
@@ -50,19 +60,36 @@ class WalletService {
   /// Includes bank integration status
   Future<Map<String, dynamic>> getWalletStatus(String userId) async {
     try {
+      // Use only columns that exist on profiles (legacy bank_* / is_sandbox_mode
+      // fields were never migrated and cause PostgREST to fail the whole query).
       final response = await _client
           .from('profiles')
-          .select('wallet_balance, wallet_status, wallet_activated_at, bank_account_id, bank_provider, is_sandbox_mode')
+          .select(
+              'wallet_balance, wallet_status, wallet_activated_at, withdrawal_bank_code, withdrawal_bank_name')
           .eq('id', userId)
           .single();
-      
+
+      final balance = (response['wallet_balance'] as num?)?.toDouble() ?? 0.0;
+      final activatedAt = _parseActivatedAt(response['wallet_activated_at']);
+      final bankCode = response['withdrawal_bank_code'] as String?;
+      final bankName = response['withdrawal_bank_name'] as String?;
+      final hasBankAccount = bankCode != null &&
+          bankCode.isNotEmpty &&
+          bankName != null &&
+          bankName.isNotEmpty;
+
       return {
-        'balance': (response['wallet_balance'] as num?)?.toDouble() ?? 0.0,
-        'status': response['wallet_status'] ?? 'inactive',
+        'balance': balance,
+        'status': normalizeWalletStatus(
+          response['wallet_status'],
+          activatedAt: activatedAt,
+          balance: balance,
+        ),
         'activated_at': response['wallet_activated_at'],
-        'has_bank_account': response['bank_account_id'] != null,
-        'bank_provider': response['bank_provider'],
-        'is_sandbox': response['is_sandbox_mode'] ?? true,
+        'has_bank_account': hasBankAccount,
+        'bank_provider': hasBankAccount ? 'flutterwave' : null,
+        // Sandbox until a withdrawal bank account is linked.
+        'is_sandbox': !hasBankAccount,
       };
     } catch (e) {
       debugPrint('Error fetching wallet status: $e');
@@ -253,45 +280,20 @@ class WalletService {
     }
   }
 
-  /// Cancel a savings goal (returns funds to wallet)
+  /// Cancel a savings goal (returns funds to wallet).
+  ///
+  /// Refund + cancel happen atomically inside the secure `cancel_savings_goal`
+  /// RPC. The client can no longer call `credit_wallet` directly.
   Future<bool> cancelSavingsGoal({
     required String userId,
     required String goalId,
   }) async {
     try {
-      // Get the current goal amount to refund
-      final goal = await _client
-          .from('savings_goals')
-          .select()
-          .eq('id', goalId)
-          .eq('user_id', userId)
-          .single();
-
-      final currentAmount = (goal['current_amount'] as num).toDouble();
-
-      // If there's money in the goal, credit it back to wallet
-      if (currentAmount > 0) {
-        final creditResult = await creditWallet(
-          userId: userId,
-          amount: currentAmount,
-          description: 'Cancelled savings goal: ${goal['title']}',
-          type: 'savings_withdrawal',
-          referenceType: 'savings_goal',
-          referenceId: goalId,
-        );
-        if (creditResult['success'] != true) {
-          return false;
-        }
-      }
-
-      // Mark goal as cancelled
-      await _client
-          .from('savings_goals')
-          .update({'status': 'cancelled', 'updated_at': DateTime.now().toIso8601String()})
-          .eq('id', goalId)
-          .eq('user_id', userId);
-
-      return true;
+      final result = await _client.rpc('cancel_savings_goal', params: {
+        'p_goal_id': goalId,
+      });
+      final map = Map<String, dynamic>.from(result as Map);
+      return map['success'] == true;
     } catch (e) {
       debugPrint('Error cancelling savings goal: $e');
       return false;
@@ -300,43 +302,61 @@ class WalletService {
 
   // ─── Wallet Activation (Parent Consent) ─────────────────────────────
 
-  /// Request wallet activation (sends consent to parent).
-  /// Returns the consent record ID or null on failure.
+  /// Request activation in-app (Parent Portal). No email sent.
+  Future<Map<String, dynamic>> requestActivationInApp({
+    required String parentEmail,
+  }) async {
+    try {
+      final result = await _client.rpc('request_wallet_activation', params: {
+        'p_parent_email': parentEmail.trim().toLowerCase(),
+      });
+      final map = Map<String, dynamic>.from(result as Map);
+      if (map['success'] == true) {
+        return {'success': true, 'parent_email': map['parent_email']};
+      }
+      return {'success': false, 'error': map['error']?.toString() ?? 'Request failed'};
+    } catch (e) {
+      debugPrint('Error requesting in-app wallet activation: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// Send parent consent email via wallet-consent edge function.
+  Future<Map<String, dynamic>> sendActivationEmail({
+    required String parentEmail,
+  }) async {
+    try {
+      final response = await _client.functions.invoke(
+        'wallet-consent',
+        body: {'parent_email': parentEmail.trim().toLowerCase()},
+      );
+
+      if (response.status == 200 && response.data is Map) {
+        final data = Map<String, dynamic>.from(response.data as Map);
+        if (data['success'] == true) {
+          return {'success': true, 'parent_email': data['parent_email']};
+        }
+        return {'success': false, 'error': data['error'] ?? 'Failed to send email'};
+      }
+
+      final err = response.data is Map
+          ? (response.data as Map)['error']?.toString()
+          : 'Failed to send activation email (${response.status})';
+      return {'success': false, 'error': err};
+    } catch (e) {
+      debugPrint('Error sending wallet activation email: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// Legacy alias — prefer [sendActivationEmail].
   Future<String?> requestWalletActivation({
     required String userId,
     required String parentEmail,
   }) async {
-    try {
-      // Generate a secure consent token
-      final token = DateTime.now().millisecondsSinceEpoch.toRadixString(36) +
-          userId.substring(0, 8);
-
-      // Create consent record
-      final response = await _client
-          .from('wallet_consent')
-          .insert({
-            'student_id': userId,
-            'parent_email': parentEmail,
-            'consent_type': 'wallet_activation',
-            'consent_token': token,
-          })
-          .select()
-          .single();
-
-      // Update profile status
-      await _client.from('profiles').update({
-        'wallet_status': 'pending_consent',
-        'updated_at': DateTime.now().toIso8601String(),
-      }).eq('id', userId);
-
-      // TODO: Phase 2 — trigger Edge Function to send consent email to parent
-      debugPrint('📧 Wallet activation requested. Token: $token → $parentEmail');
-
-      return response['id'] as String;
-    } catch (e) {
-      debugPrint('Error requesting wallet activation: $e');
-      return null;
-    }
+    final result = await sendActivationEmail(parentEmail: parentEmail);
+    if (result['success'] == true) return userId;
+    return null;
   }
 
   /// Check the current consent status for a student
@@ -359,56 +379,148 @@ class WalletService {
     }
   }
 
-  /// Admin: Approve wallet activation directly (bypasses email for now)
+  /// Admin: Activate wallet and grant payout consent (secure RPC).
   Future<bool> adminActivateWallet(String userId) async {
     try {
-      await _client.from('profiles').update({
-        'wallet_status': 'active',
-        'wallet_activated_at': DateTime.now().toIso8601String(),
-        'updated_at': DateTime.now().toIso8601String(),
-      }).eq('id', userId);
-      return true;
+      final result = await _client.rpc('admin_activate_wallet', params: {
+        'p_student_id': userId,
+      });
+      final map = Map<String, dynamic>.from(result as Map);
+      return map['success'] == true;
     } catch (e) {
       debugPrint('Error activating wallet: $e');
       return false;
     }
   }
 
+  /// Available balance in kobo (wallet minus pending withdrawals).
+  Future<int> getAvailableBalanceKobo(String userId) async {
+    try {
+      final result = await _client.rpc('get_available_balance_kobo', params: {
+        'p_user_id': userId,
+      });
+      return (result as num?)?.toInt() ?? 0;
+    } catch (e) {
+      debugPrint('Error fetching available balance: $e');
+      return 0;
+    }
+  }
+
   // ─── Admin: Reward Disbursements ────────────────────────────────────
 
-  /// Admin: Get pending reward disbursements
-  Future<List<Map<String, dynamic>>> getPendingDisbursements() async {
+  /// Admin: Search students by name and/or school for reward issuance.
+  Future<List<Map<String, dynamic>>> searchStudentsForReward({
+    String? nameQuery,
+    String? schoolQuery,
+    int limit = 25,
+  }) async {
     try {
-      final response = await _client
-          .from('reward_disbursements')
-          .select('*, profiles!reward_disbursements_student_id_fkey(name, school_name)')
-          .eq('status', 'pending_approval')
-          .order('created_at', ascending: false);
-      return List<Map<String, dynamic>>.from(response);
+      final name = nameQuery?.trim() ?? '';
+      final school = schoolQuery?.trim() ?? '';
+
+      if (name.length < 2 && school.length < 2) {
+        return [];
+      }
+
+      // Admin-gated server RPC (avoids exposing a broad profiles query).
+      final result = await _client.rpc('admin_search_students_for_reward', params: {
+        'p_name': name,
+        'p_school': school,
+        'p_limit': limit,
+      });
+      return List<Map<String, dynamic>>.from(result as List);
     } catch (e) {
-      debugPrint('Error fetching pending disbursements: $e');
+      debugPrint('Error searching students for reward: $e');
       return [];
     }
   }
 
-  /// Admin: Create a reward disbursement
-  Future<bool> createRewardDisbursement({
+  /// Admin: Get reward disbursements by status (via secure RPC).
+  Future<List<Map<String, dynamic>>> getRewardDisbursements({
+    String? status,
+  }) async {
+    try {
+      final result = await _client.rpc(
+        'admin_get_reward_disbursements',
+        params: {'p_status': status},
+      );
+      final map = Map<String, dynamic>.from(result as Map);
+      if (map['success'] != true) return [];
+      final rows = map['disbursements'];
+      if (rows is! List) return [];
+      return List<Map<String, dynamic>>.from(rows);
+    } catch (e) {
+      debugPrint('Error fetching reward disbursements: $e');
+      return [];
+    }
+  }
+
+  /// Admin: Get pending reward disbursements
+  Future<List<Map<String, dynamic>>> getPendingDisbursements() async {
+    final rows = await getRewardDisbursements(status: 'pending_approval');
+    return rows.map((row) {
+      return {
+        ...row,
+        'profiles': {
+          'name': row['student_name'],
+          'school_name': row['school_name'],
+        },
+      };
+    }).toList();
+  }
+
+  /// Admin: Get completed/failed reward history
+  Future<List<Map<String, dynamic>>> getDisbursementHistory() async {
+    final all = await getRewardDisbursements();
+    return all
+        .where((row) => row['status'] != 'pending_approval')
+        .toList();
+  }
+
+  /// Admin: Create a reward disbursement record (pending approval).
+  Future<Map<String, dynamic>> createRewardDisbursement({
     required String studentId,
     required double amount,
     required String reason,
     String? challengeId,
   }) async {
     try {
-      await _client.from('reward_disbursements').insert({
-        'student_id': studentId,
-        'amount': amount,
-        'reason': reason,
-        'challenge_id': challengeId,
-      });
-      return true;
+      final response = await _client
+          .from('reward_disbursements')
+          .insert({
+            'student_id': studentId,
+            'amount': amount,
+            'reason': reason,
+            'challenge_id': challengeId,
+          })
+          .select('id')
+          .single();
+      return {'success': true, 'id': response['id']};
     } catch (e) {
       debugPrint('Error creating reward disbursement: $e');
-      return false;
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// Admin: Create and immediately credit a reward to the student's LeadWallet.
+  Future<Map<String, dynamic>> issueRewardDirectly({
+    required String studentId,
+    required double amount,
+    required String reason,
+    required String adminId,
+    String? challengeId,
+  }) async {
+    try {
+      final result = await _client.rpc('admin_issue_reward', params: {
+        'p_student_id': studentId,
+        'p_amount': amount,
+        'p_reason': reason,
+        if (challengeId != null) 'p_challenge_id': challengeId,
+      });
+      return Map<String, dynamic>.from(result as Map);
+    } catch (e) {
+      debugPrint('Error issuing reward directly: $e');
+      return {'success': false, 'error': e.toString()};
     }
   }
 
@@ -418,64 +530,104 @@ class WalletService {
     required String adminId,
   }) async {
     try {
-      // Get the disbursement details
-      final disbursement = await _client
-          .from('reward_disbursements')
-          .select()
-          .eq('id', disbursementId)
-          .single();
-
-      final studentId = disbursement['student_id'] as String;
-      final amount = (disbursement['amount'] as num).toDouble();
-      final reason = disbursement['reason'] as String;
-
-      // Credit the student's wallet
-      final creditResult = await creditWallet(
-        userId: studentId,
-        amount: amount,
-        description: 'Reward: $reason',
-        type: 'reward',
-        referenceType: 'admin_grant',
-        referenceId: disbursementId,
-        approvedBy: adminId,
-      );
-
-      if (creditResult['success'] != true) {
-        // Mark as failed
-        await _client.from('reward_disbursements').update({
-          'status': 'failed',
-          'updated_at': DateTime.now().toIso8601String(),
-        }).eq('id', disbursementId);
-        return false;
-      }
-
-      // Mark as completed
-      await _client.from('reward_disbursements').update({
-        'status': 'completed',
-        'approved_by': adminId,
-        'approved_at': DateTime.now().toIso8601String(),
-        'disbursed_at': DateTime.now().toIso8601String(),
-        'updated_at': DateTime.now().toIso8601String(),
-      }).eq('id', disbursementId);
-
-      return true;
+      final result = await _client.rpc('admin_process_reward_disbursement', params: {
+        'p_disbursement_id': disbursementId,
+      });
+      final map = Map<String, dynamic>.from(result as Map);
+      return map['success'] == true;
     } catch (e) {
       debugPrint('Error approving disbursement: $e');
       return false;
     }
   }
 
-  /// Admin: Reject a reward disbursement
+  /// Admin: List pending withdrawal requests (admin-gated RPC; the underlying
+  /// view exposed student PII to all authenticated users and is now locked down).
+  Future<List<Map<String, dynamic>>> getPendingWithdrawalsAdmin() async {
+    try {
+      final result = await _client.rpc('admin_get_pending_withdrawals');
+      return List<Map<String, dynamic>>.from(result as List);
+    } catch (e) {
+      debugPrint('Error fetching pending withdrawals: $e');
+      return [];
+    }
+  }
+
+  /// Admin: Approve a withdrawal request (does not send funds yet)
+  Future<Map<String, dynamic>> adminApproveWithdrawal(String withdrawalId) async {
+    try {
+      final result = await _client.rpc('admin_approve_withdrawal', params: {
+        'p_withdrawal_id': withdrawalId,
+      });
+      return Map<String, dynamic>.from(result as Map);
+    } catch (e) {
+      debugPrint('Error approving withdrawal: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// Admin: Reject a withdrawal request
+  Future<Map<String, dynamic>> adminRejectWithdrawal(
+    String withdrawalId, {
+    String reason = 'Rejected by admin',
+  }) async {
+    try {
+      final result = await _client.rpc('admin_reject_withdrawal', params: {
+        'p_withdrawal_id': withdrawalId,
+        'p_reason': reason,
+      });
+      return Map<String, dynamic>.from(result as Map);
+    } catch (e) {
+      debugPrint('Error rejecting withdrawal: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// Admin: Mark a stuck pending/approved/processing withdrawal as failed
+  /// (releases reserved available balance; does not debit the ledger).
+  Future<Map<String, dynamic>> adminFailWithdrawal(
+    String withdrawalId, {
+    String reason = 'Marked failed by admin',
+  }) async {
+    try {
+      final result = await _client.rpc('admin_fail_withdrawal', params: {
+        'p_withdrawal_id': withdrawalId,
+        'p_reason': reason,
+      });
+      return Map<String, dynamic>.from(result as Map);
+    } catch (e) {
+      debugPrint('Error failing withdrawal: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// Admin: Mark processing/approved as paid and debit ledger (idempotent).
+  Future<Map<String, dynamic>> adminCompleteWithdrawalPaid(
+    String withdrawalId, {
+    String? transferId,
+    String? note,
+  }) async {
+    try {
+      final result = await _client.rpc('admin_complete_withdrawal_paid', params: {
+        'p_withdrawal_id': withdrawalId,
+        'p_transfer_id': transferId,
+        'p_note': note,
+      });
+      return Map<String, dynamic>.from(result as Map);
+    } catch (e) {
+      debugPrint('Error completing withdrawal: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// Admin: Reject a reward disbursement (admin-gated RPC).
   Future<bool> rejectDisbursement(String disbursementId) async {
     try {
-      await _client
-          .from('reward_disbursements')
-          .update({
-            'status': 'rejected',
-            'updated_at': DateTime.now().toIso8601String(),
-          })
-          .eq('id', disbursementId);
-      return true;
+      final result = await _client.rpc('admin_reject_reward_disbursement', params: {
+        'p_disbursement_id': disbursementId,
+      });
+      final map = Map<String, dynamic>.from(result as Map);
+      return map['success'] == true;
     } catch (e) {
       debugPrint('Error rejecting disbursement: $e');
       return false;

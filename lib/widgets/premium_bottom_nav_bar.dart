@@ -100,7 +100,8 @@ class PremiumBottomNavBar extends StatelessWidget {
                   color: isSelected ? AppColors.primary : Colors.grey.shade500,
                 ),
                 maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                overflow: TextOverflow.clip,
+                softWrap: false,
               ),
             ],
           ),
@@ -263,10 +264,10 @@ class GlassBottomNavBar extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
         child: Container(
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.85),
+            color: Colors.white.withValues(alpha: 0.92),
             border: Border(
               top: BorderSide(
-                color: Colors.white.withValues(alpha: 0.6),
+                color: AppColors.primary.withValues(alpha: 0.12),
                 width: 1.0,
               ),
             ),
@@ -383,8 +384,10 @@ class GlassBottomNavBar extends StatelessWidget {
                   Container(
                     width: 4 * safeValue,
                     height: 4 * safeValue,
-                    decoration: const BoxDecoration(
-                      color: AppColors.primary,
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? AppColors.secondaryBright
+                          : AppColors.primary,
                       shape: BoxShape.circle,
                     ),
                   ),

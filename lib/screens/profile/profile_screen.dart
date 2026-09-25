@@ -12,13 +12,17 @@ import 'package:my_leadership_quest/screens/subscription/subscription_management
 import 'package:my_leadership_quest/screens/coins/coin_transaction_history_screen.dart';
 import 'package:my_leadership_quest/screens/admin/admin_login_screen.dart';
 import 'package:my_leadership_quest/screens/admin/school_courses_admin_screen.dart';
+import 'package:my_leadership_quest/screens/school_admin/school_library_admin_screen.dart';
 import '../../services/admin_service.dart';
 import '../../providers/school_course_provider.dart';
 import 'parent_portal_screen.dart';
 import 'account_settings_screen.dart';
-import '../../services/subscription_service.dart';
 import '../../services/supabase_service.dart';
+import '../../utils/entitlements.dart';
 import '../../services/push_notification_service.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../services/organization_settings_service.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -29,6 +33,51 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   bool _showFallback = false;
+  bool _showAvatarHint = false;
+
+  static const _avatarHintKey = 'mlq_avatar_hint_shown';
+
+  Future<void> _checkAvatarHint() async {
+    final prefs = await SharedPreferences.getInstance();
+    final shown = prefs.getBool(_avatarHintKey) ?? false;
+    if (!shown && mounted) {
+      setState(() => _showAvatarHint = true);
+    }
+  }
+
+  Future<void> _dismissAvatarHint() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_avatarHintKey, true);
+    if (mounted) setState(() => _showAvatarHint = false);
+  }
+
+  Future<void> _uploadProfilePhoto(UserProvider userProvider, UserModel user) async {
+    // Dismiss hint when user actually taps to upload
+    if (_showAvatarHint) await _dismissAvatarHint();
+
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final f = result.files.first;
+    final bytes = f.bytes;
+    if (bytes == null) return;
+
+    final url = await OrganizationSettingsService.instance.uploadPublicAsset(
+      bytes,
+      f.name,
+      folder: 'avatars/users/${user.id}',
+    );
+    if (url == null || url.isEmpty) return;
+
+    await SupabaseService.instance.updateUserProfile(avatarUrl: url);
+    await userProvider.refreshUser();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Profile photo updated'), backgroundColor: Colors.green),
+    );
+  }
 
   @override
   void initState() {
@@ -42,6 +91,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       // Initialize school course provider for school admin check
       _initializeSchoolProvider();
+
+      // Show one-time avatar hint to inform users they can update their photo
+      _checkAvatarHint();
     });
 
     // Show fallback message after 3 seconds if user is still null
@@ -166,6 +218,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ],
         ),
         backgroundColor: AppColors.primary,
+        automaticallyImplyLeading: Navigator.canPop(context),
         elevation: 0,
       ),
       body: Center(
@@ -342,6 +395,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildUserInfoCard(BuildContext context, UserModel user) {
+    final userProvider = Provider.of<UserProvider>(context, listen: false);
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -364,30 +418,115 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
       child: Column(
         children: [
-          // Avatar
-          Container(
-            width: 100,
-            height: 100,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
-                  blurRadius: 10,
-                  spreadRadius: 1,
+          // Avatar with one-time hint overlay
+          GestureDetector(
+            onTap: () => _uploadProfilePhoto(userProvider, user),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  width: 104,
+                  height: 104,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 10,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                  child: ClipOval(
+                    child: user.avatarUrl != null && user.avatarUrl!.isNotEmpty
+                        ? Image.network(
+                            user.avatarUrl!,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => _avatarFallbackLetter(user.name),
+                          )
+                        : _avatarFallbackLetter(user.name),
+                  ),
                 ),
+                // Camera edit badge — always visible for quick discoverability
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  child: Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.15),
+                          blurRadius: 6,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(Icons.camera_alt_rounded, size: 16, color: Color(0xFF7B1FA2)),
+                  ),
+                ),
+                // One-time hint tooltip bubble — shows above avatar
+                if (_showAvatarHint)
+                  Positioned(
+                    bottom: 108,
+                    left: -60,
+                    child: GestureDetector(
+                      onTap: _dismissAvatarHint,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: Container(
+                          width: 224,
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(14),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.18),
+                                blurRadius: 12,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.photo_camera_rounded,
+                                  size: 18, color: Color(0xFF7B1FA2)),
+                              const SizedBox(width: 8),
+                              const Expanded(
+                                child: Text(
+                                  'You can now update your profile picture! Tap your photo to change it.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Color(0xFF3A1C55),
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.4,
+                                  ),
+                                ),
+                              ),
+                              GestureDetector(
+                                onTap: _dismissAvatarHint,
+                                child: const Icon(Icons.close_rounded, size: 14, color: Colors.grey),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ).animate().fade(duration: 300.ms).slideY(begin: 0.1),
               ],
             ),
-            child: Center(
-              child: Text(
-                user.name.isNotEmpty ? user.name[0].toUpperCase() : 'U',
-                style: AppTextStyles.heading1.copyWith(
-                  color: AppColors.primary,
-                ),
-              ),
-            ),
           ).animate().scale(duration: 600.ms, curve: Curves.elasticOut),
+          const SizedBox(height: 8),
+          Text(
+            'Tap photo to change',
+            style: AppTextStyles.body.copyWith(color: Colors.white.withOpacity(0.9)),
+          ),
           const SizedBox(height: 16),
 
           // User name and premium checkmark
@@ -402,40 +541,80 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
               const SizedBox(width: 8),
               // Premium chip - uses UserProvider's isPremium (synced from database)
-              if (user.isPremium)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        Color(0xFF9C27B0), // Purple
-                        Color(0xFF673AB7), // Deep Purple
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Color(0xFF9C27B0).withOpacity(0.3),
-                        blurRadius: 6,
-                        spreadRadius: 1,
+              Builder(
+                builder: (context) {
+                  if (Entitlements.hasPaidAccess(user)) {
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [
+                            Color(0xFF9C27B0),
+                            Color(0xFF673AB7),
+                          ],
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF9C27B0).withOpacity(0.3),
+                            blurRadius: 6,
+                            spreadRadius: 1,
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: const [
-                      Icon(Icons.verified_rounded,
-                          size: 16, color: Colors.white),
-                      SizedBox(width: 4),
-                      Text('Premium',
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 12)),
-                    ],
-                  ),
-                ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.verified_rounded,
+                              size: 16, color: Colors.white),
+                          SizedBox(width: 4),
+                          Text('Premium',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12)),
+                        ],
+                      ),
+                    );
+                  }
+                  final days = Entitlements.miniCourseDaysRemaining(user);
+                  if (days > 0) {
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppColors.secondary,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        'Courses · $days d left',
+                        style: const TextStyle(
+                          color: Color(0xFF1F1A22),
+                          fontWeight: FontWeight.w800,
+                          fontSize: 12,
+                        ),
+                      ),
+                    );
+                  }
+                  return Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Text(
+                      'Free',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 12,
+                      ),
+                    ),
+                  );
+                },
+              ),
               const SizedBox(width: 6),
               // "via School" badge when entitlements include a school org
               FutureBuilder<Map<String, dynamic>>(
@@ -505,6 +684,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _avatarFallbackLetter(String name) {
+    return Center(
+      child: Text(
+        name.isNotEmpty ? name[0].toUpperCase() : 'U',
+        style: AppTextStyles.heading1.copyWith(
+          color: AppColors.primary,
+        ),
       ),
     );
   }
@@ -710,8 +900,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(40),
-              child: Image.asset(
-                badge.imageAsset,
+              child: BadgeImage(
+                badge: badge,
                 fit: BoxFit.cover,
               ),
             ),
@@ -741,11 +931,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
       child: Column(
         children: [
           _buildSettingsItem(
+            icon: Icons.account_balance_wallet_rounded,
+            title: 'LeadWallet',
+            onTap: () => Navigator.pushNamed(context, '/wallet'),
+          ),
+          const Divider(),
+          _buildSettingsItem(
+            icon: Icons.card_giftcard_rounded,
+            title: 'Invite & Earn',
+            onTap: () => Navigator.pushNamed(context, '/invite-earn'),
+          ),
+          const Divider(),
+          _buildSettingsItem(
             icon: Icons.edit,
             title: 'Edit Profile',
             onTap: () {
               _showEditProfileDialog(context, user);
             },
+          ),
+          const Divider(),
+          _buildSettingsItem(
+            icon: Icons.leaderboard_rounded,
+            title: 'Leaderboard',
+            onTap: () => Navigator.pushNamed(context, '/leaderboard'),
           ),
           const Divider(),
           _buildSettingsItem(
@@ -758,6 +966,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
               );
             },
+          ),
+          const Divider(),
+          _buildSettingsItem(
+            icon: Icons.school_outlined,
+            title: 'School class code',
+            onTap: () => Navigator.pushNamed(context, '/class-code'),
           ),
           const Divider(),
           _buildSettingsItem(
@@ -801,18 +1015,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
             title: 'About',
             onTap: () => _showAboutDialog(context),
           ),
-          // Dev-only: View Welcome Screen button
-          if (kDebugMode) ...[
-            const Divider(),
-            _buildSettingsItem(
-              icon: Icons.movie_filter_rounded,
-              title: 'View Welcome Screen',
-              onTap: () {
-                Navigator.of(context).pushNamed('/welcome-preview');
-              },
-            ),
-          ],
-          // Dev-only shortcuts hidden per user request
+          // Dev-only shortcuts hidden (View Welcome Screen / onboarding previews)
+          // if (kDebugMode) ...[
+          //   const Divider(),
+          //   _buildSettingsItem(
+          //     icon: Icons.movie_filter_rounded,
+          //     title: 'View Welcome Screen',
+          //     onTap: () {
+          //       Navigator.of(context).pushNamed('/welcome-preview');
+          //     },
+          //   ),
+          // ],
           // if (kDebugMode) ...[
           //   const Divider(),
           //   _buildSettingsItem(
@@ -862,18 +1075,31 @@ class _ProfileScreenState extends State<ProfileScreen> {
           // School Admin Portal - for school admins with premium
           Consumer<SchoolCourseProvider>(
             builder: (context, schoolProvider, _) {
-              if (schoolProvider.isSchoolAdmin && schoolProvider.hasPremium) {
+              if (schoolProvider.isSchoolAdmin) {
                 return Column(
                   children: [
                     const Divider(),
+                    if (schoolProvider.hasPremium)
+                      _buildSettingsItem(
+                        icon: Icons.school,
+                        title: 'School Courses Admin',
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (context) =>
+                                  const SchoolCoursesAdminScreen(),
+                            ),
+                          );
+                        },
+                      ),
                     _buildSettingsItem(
-                      icon: Icons.school,
-                      title: 'School Courses Admin',
+                      icon: Icons.video_library_outlined,
+                      title: 'School Library Admin',
                       onTap: () {
                         Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (context) =>
-                                const SchoolCoursesAdminScreen(),
+                                const SchoolLibraryAdminScreen(),
                           ),
                         );
                       },
@@ -928,6 +1154,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     String name = user.name;
     int age = user.age;
+    String? gender = user.gender;
     // Approximate birthday based on current age (defaults to mid-year)
     DateTime? birthday = DateTime(DateTime.now().year - age, 6, 15);
 
@@ -962,6 +1189,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     },
                   ),
                   const SizedBox(height: 16),
+
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Illustrations', style: AppTextStyles.body),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Boy'),
+                        selected: gender == 'male',
+                        onSelected: (_) => setState(() => gender = 'male'),
+                      ),
+                      ChoiceChip(
+                        label: const Text('Girl'),
+                        selected: gender == 'female',
+                        onSelected: (_) => setState(() => gender = 'female'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
 
                   // Birthday picker (replaces age stepper)
                   ListTile(
@@ -1029,6 +1279,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     userProvider.updateUserProfile(
                       name: name,
                       age: age,
+                      gender: gender,
                     );
 
                     Navigator.pop(context);
@@ -1080,8 +1331,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(60),
-                  child: Image.asset(
-                    badge.imageAsset,
+                  child: BadgeImage(
+                    badge: badge,
                     fit: BoxFit.cover,
                   ),
                 ),
@@ -1185,8 +1436,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               ),
                               child: ClipRRect(
                                 borderRadius: BorderRadius.circular(30),
-                                child: Image.asset(
-                                  badge.imageAsset,
+                                child: BadgeImage(
+                                  badge: badge,
                                   fit: BoxFit.cover,
                                 ),
                               ),

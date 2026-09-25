@@ -10,14 +10,14 @@ import '../models/models.dart';
 import '../services/supabase_service.dart';
 
 class GratitudeProvider with ChangeNotifier {
+  /// Server awards this via DB trigger on the first entry each day (WAT).
+  static const int gratitudeXpReward = 10;
+
   List<GratitudeEntry> _entries = [];
   bool _isLoaded = false;
   final SupabaseService _supabaseService = SupabaseService();
   String? _loadedForUserId;
   StreamSubscription<AuthState>? _authSubscription;
-
-  /// XP reward for gratitude entries (once per day)
-  static const int gratitudeXpReward = 10;
 
   GratitudeProvider() {
     _setupAuthListener();
@@ -25,6 +25,8 @@ class GratitudeProvider with ChangeNotifier {
 
   void _setupAuthListener() {
     try {
+      // Always safe to subscribe; sessions may be null when logged out.
+      // Avoid retry loops that spam logs on normal "signed out" state.
       _authSubscription = _supabaseService.client.auth.onAuthStateChange.listen(
         (data) {
           final event = data.event;
@@ -47,7 +49,7 @@ class GratitudeProvider with ChangeNotifier {
         },
       );
     } catch (e) {
-      debugPrint('Error setting up gratitude auth listener: $e');
+      debugPrint('GratitudeProvider: Error setting up auth listener: $e');
     }
   }
 
@@ -103,14 +105,21 @@ class GratitudeProvider with ChangeNotifier {
         entry.date.isBefore(endOfDay.add(const Duration(seconds: 1))));
   }
 
+  /// 00:00 Africa/Lagos (WAT, UTC+1, no DST) as a UTC instant.
+  DateTime _watDayStartUtc([DateTime? utcNow]) {
+    final wat = (utcNow ?? DateTime.now().toUtc()).add(const Duration(hours: 1));
+    return DateTime.utc(wat.year, wat.month, wat.day)
+        .subtract(const Duration(hours: 1));
+  }
+
   /// Check if user has already posted today by querying the database
-  /// This is the authoritative check to prevent XP farming exploits
+  /// This is the authoritative check to prevent XP farming exploits.
+  /// Uses WAT so it matches the DB trigger that awards first-entry XP.
   Future<bool> hasPostedTodayFromDatabase() async {
     if (!_supabaseService.isAuthenticated) return hasPostedToday();
 
     try {
-      final now = DateTime.now().toUtc();
-      final startOfDay = DateTime.utc(now.year, now.month, now.day);
+      final startOfDay = _watDayStartUtc();
       final endOfDay = startOfDay.add(const Duration(days: 1));
 
       final response = await _supabaseService.client
@@ -137,8 +146,8 @@ class GratitudeProvider with ChangeNotifier {
     return !(await hasPostedTodayFromDatabase());
   }
 
-  /// Add a new gratitude entry
-  /// Returns true if XP was awarded (first entry of the day), false otherwise
+  /// Add a new gratitude entry.
+  /// Returns true if this was the first entry of the day, false otherwise.
   /// Throws an exception if user has already posted today
   Future<bool> addEntry(GratitudeEntry entry,
       {bool enforceLimit = true}) async {
@@ -150,12 +159,10 @@ class GratitudeProvider with ChangeNotifier {
           'You can only add one gratitude entry per day. Come back tomorrow!');
     }
 
-    // For XP award decision, use database check (authoritative) to prevent exploits
-    // This is defense-in-depth - the database trigger also prevents duplicates
-    bool shouldAwardXp = false;
+    bool isFirstEntryToday = false;
     if (_supabaseService.isAuthenticated) {
-      shouldAwardXp = await canPostTodayFromDatabase();
-      debugPrint('Database check for XP eligibility: $shouldAwardXp');
+      isFirstEntryToday = await canPostTodayFromDatabase();
+      debugPrint('Database check for first entry today: $isFirstEntryToday');
     }
 
     try {
@@ -170,20 +177,6 @@ class GratitudeProvider with ChangeNotifier {
       // Sync to database if authenticated
       if (_supabaseService.isAuthenticated) {
         await _syncEntryToDatabase(entry);
-
-        // Award XP only if database confirms this is the first entry today
-        // This prevents XP farming via add/delete/repeat exploit
-        if (shouldAwardXp) {
-          try {
-            await _supabaseService.addXp(gratitudeXpReward);
-            debugPrint('Awarded $gratitudeXpReward XP for gratitude entry');
-          } catch (e) {
-            debugPrint('Failed to award XP for gratitude entry: $e');
-          }
-        } else {
-          debugPrint(
-              'XP not awarded - database shows entry already exists today');
-        }
       }
 
       // Trigger gratitude-specific challenge evaluation
@@ -200,7 +193,7 @@ class GratitudeProvider with ChangeNotifier {
         debugPrint('Badge evaluation after gratitude entry failed: $e');
       }
 
-      return shouldAwardXp;
+      return isFirstEntryToday;
     } catch (e) {
       debugPrint('Error adding gratitude entry: $e');
       // Remove from local list if database sync fails

@@ -8,10 +8,41 @@ class LocalCourseCache {
   LocalCourseCache._();
   static final instance = LocalCourseCache._();
 
+  /// Bump when course/quiz parsing changes so stale device cache is discarded.
+  static const int _cacheSchemaVersion = 7;
+
   String _courseKey(String userId, String dateKey) => 'mini_course:$userId:$dateKey';
   String _metaKey(String userId, String dateKey) => 'mini_course:meta:$userId:$dateKey';
   String _lastSuccessfulKey(String userId) => 'mini_course:last_successful:$userId';
   String _globalKey(String dateKey) => 'global_mini_courses:$dateKey';
+  String get _globalSchemaKey => 'global_mini_courses:schema_version';
+
+  Future<bool> _isGlobalCacheCurrent() async {
+    final prefs = await SharedPreferences.getInstance();
+    final version = prefs.getInt(_globalSchemaKey) ?? 1;
+    return version >= _cacheSchemaVersion;
+  }
+
+  Future<void> _markGlobalCacheCurrent() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_globalSchemaKey, _cacheSchemaVersion);
+  }
+
+  Future<void> _invalidateOutdatedGlobalCache() async {
+    if (await _isGlobalCacheCurrent()) return;
+    final prefs = await SharedPreferences.getInstance();
+    final staleKeys = prefs
+        .getKeys()
+        .where((key) => key.startsWith('global_mini_courses:'))
+        .toList();
+    for (final key in staleKeys) {
+      await prefs.remove(key);
+    }
+    await _markGlobalCacheCurrent();
+    debugPrint(
+      '[LocalCache] Cleared outdated global course cache (schema v$_cacheSchemaVersion)',
+    );
+  }
 
   Future<void> saveCourse({
     required String userId,
@@ -80,6 +111,7 @@ class LocalCourseCache {
 
   // ===== Global daily courses (shared trio) =====
   Future<void> saveDailyCourses(String dateKey, List<MiniCourseModel> courses) async {
+    await _invalidateOutdatedGlobalCache();
     final prefs = await SharedPreferences.getInstance();
     final service = SupabaseDailyCourseService.instance;
     final list = <Map<String, dynamic>>[];
@@ -93,10 +125,12 @@ class LocalCourseCache {
       list.add(map);
     }
     await prefs.setString(_globalKey(dateKey), json.encode(list));
+    await _markGlobalCacheCurrent();
     debugPrint('[LocalCache] Saved global courses for $dateKey (count=${courses.length})');
   }
 
   Future<List<MiniCourseModel>?> getDailyCourses(String dateKey) async {
+    await _invalidateOutdatedGlobalCache();
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_globalKey(dateKey));
     if (raw == null) return null;

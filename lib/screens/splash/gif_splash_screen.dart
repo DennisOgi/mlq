@@ -4,23 +4,36 @@ import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 
 /// A lightweight splash screen that shows a GIF for a fixed duration
-/// and then navigates to the provided [nextScreen].
+/// and then either calls [onFinished] or navigates to [nextScreen].
 class GifSplashScreen extends StatefulWidget {
   const GifSplashScreen({
     super.key,
     required this.gifAssetPath,
-    required this.nextScreen,
+    this.nextScreen,
+    this.onFinished,
     this.minDisplayTime = const Duration(seconds: 5),
-  });
+    this.readyToNavigate = true,
+  }) : assert(
+          nextScreen != null || onFinished != null,
+          'Provide nextScreen and/or onFinished',
+        );
 
   /// Path to the bundled GIF in assets.
   final String gifAssetPath;
 
   /// The widget to push-replace when the splash sequence completes.
-  final Widget nextScreen;
+  /// Ignored when [onFinished] is set (preferred for root/home splash).
+  final Widget? nextScreen;
+
+  /// When set, called instead of Navigator.pushReplacement.
+  /// Use this for MaterialApp `home` so Provider rebuilds cannot remount splash.
+  final VoidCallback? onFinished;
 
   /// Minimum amount of time to keep the splash visible.
   final Duration minDisplayTime;
+
+  /// When false, splash stays up after [minDisplayTime] until this becomes true.
+  final bool readyToNavigate;
 
   @override
   State<GifSplashScreen> createState() => _GifSplashScreenState();
@@ -31,11 +44,11 @@ class _GifSplashScreenState extends State<GifSplashScreen>
   late final AnimationController _fadeCtrl;
   Timer? _timer;
   bool _hasNavigated = false;
+  bool _minTimeElapsed = false;
 
   @override
   void initState() {
     super.initState();
-    // Full-screen immersive mode.
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersive);
 
     _fadeCtrl = AnimationController(
@@ -43,27 +56,54 @@ class _GifSplashScreenState extends State<GifSplashScreen>
       duration: const Duration(milliseconds: 800),
     );
 
-    // Delay a bit, then fade-in.
     Future.delayed(const Duration(milliseconds: 200), () {
       if (mounted) _fadeCtrl.forward();
     });
 
-    // Start timer for navigation
-    _timer = Timer(widget.minDisplayTime, _navigateNext);
+    _timer = Timer(widget.minDisplayTime, () {
+      _minTimeElapsed = true;
+      _tryNavigate();
+    });
   }
 
-  void _navigateNext() {
+  @override
+  void didUpdateWidget(covariant GifSplashScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.readyToNavigate && !oldWidget.readyToNavigate) {
+      _tryNavigate();
+    }
+  }
+
+  void _tryNavigate() {
     if (!mounted || _hasNavigated) return;
+    if (!_minTimeElapsed || !widget.readyToNavigate) {
+      if (kDebugMode) {
+        debugPrint(
+          '[SplashScreen] Waiting to navigate '
+          '(minElapsed=$_minTimeElapsed, ready=${widget.readyToNavigate})',
+        );
+      }
+      return;
+    }
     _hasNavigated = true;
-    
-    if (kDebugMode) debugPrint('[SplashScreen] Navigating to next screen');
-    
-    // Use schedulerBinding to ensure navigation happens after current frame
+
+    if (kDebugMode) debugPrint('[SplashScreen] Completing splash');
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+
+      // Prefer in-place completion for root splash (avoids home remount loops).
+      if (widget.onFinished != null) {
+        widget.onFinished!();
+        return;
+      }
+
+      final next = widget.nextScreen;
+      if (next == null) return;
+
       Navigator.of(context).pushReplacement(
         PageRouteBuilder(
-          pageBuilder: (_, __, ___) => widget.nextScreen,
+          pageBuilder: (_, __, ___) => next,
           transitionDuration: const Duration(milliseconds: 500),
           transitionsBuilder: (_, animation, __, child) => FadeTransition(
             opacity: animation,

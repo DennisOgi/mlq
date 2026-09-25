@@ -3,21 +3,31 @@ import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:my_leadership_quest/widgets/desktop_nav_rail.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'firebase/firebase_initializer.dart';
+import 'firebase/firebase_background_handler.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'l10n/app_localizations.dart';
 import 'package:my_leadership_quest/services/config_service.dart';
+import 'package:my_leadership_quest/constants/app_constants.dart';
+import 'package:my_leadership_quest/utils/app_tab_navigation.dart';
 import 'package:my_leadership_quest/screens/admin/admin_login_screen.dart';
 import 'package:my_leadership_quest/screens/admin/admin_dashboard_screen.dart';
 import 'package:my_leadership_quest/screens/admin/admin_users_screen.dart';
 import 'package:my_leadership_quest/screens/admin/challenge_form_screen.dart';
 import 'package:my_leadership_quest/screens/admin/challenge_participants_screen.dart';
 import 'package:my_leadership_quest/screens/admin/analytics_dashboard_screen.dart';
+import 'package:my_leadership_quest/screens/admin/ai_challenge_generator_screen.dart';
 import 'package:my_leadership_quest/screens/leaderboard/leaderboard_screen.dart';
 import 'package:my_leadership_quest/screens/leaderboard/hall_of_fame_screen.dart';
+import 'package:my_leadership_quest/screens/lead_market/lead_market_sponsors_screen.dart';
+import 'package:my_leadership_quest/screens/lead_market/my_market_orders_screen.dart';
+import 'package:my_leadership_quest/screens/sponsor/sponsor_dashboard_screen.dart';
 import 'package:my_leadership_quest/screens/challenges/challenge_detail_screen.dart';
 import 'package:my_leadership_quest/screens/onboarding/onboarding_screen.dart';
 import 'package:my_leadership_quest/screens/onboarding/pages/welcome_page.dart';
@@ -35,23 +45,33 @@ import 'screens/goals/goals_screen.dart';
 import 'screens/goals/goal_history_screen.dart';
 import 'screens/challenges/challenges_screen.dart';
 import 'screens/subscription/subscription_management_screen.dart';
+import 'screens/subscription/subscription_access_gate.dart';
+import 'screens/referral/referral_screen.dart';
 import 'screens/challenges/premium_challenge_unlock_screen.dart';
 import 'screens/b2b/class_code_join_screen.dart';
 import 'screens/admin/school_onboarding_screen.dart';
 import 'screens/admin/job_runs_screen.dart';
 import 'screens/admin/reward_disbursement_screen.dart';
 import 'screens/wallet/wallet_dashboard_screen.dart';
+import 'screens/wallet/wallet_activation_screen.dart';
+import 'screens/profile/setup_security_questions_screen.dart';
+import 'screens/vas/vas_portal_screen.dart';
+import 'widgets/admin_gate.dart';
 import 'services/background_service_manager.dart';
 import 'services/badge_service.dart';
 import 'services/cache_service.dart';
 import 'services/supabase_service.dart';
 import 'services/ai_coach_service.dart';
 import 'services/ai_course_generator_service.dart';
+import 'services/ai_challenge_generator_service.dart';
 import 'services/autonomous_coach_service.dart';
 import 'services/unified_autonomous_coach.dart';
 import 'services/push_notification_service.dart';
+import 'services/notification_navigation.dart';
+import 'services/referral_service.dart';
+import 'services/flutterwave_service.dart';
+import 'services/vas_session.dart';
 import 'package:my_leadership_quest/services/app_update_service.dart';
-import 'constants/app_constants.dart';
 import 'services/email_report_service.dart';
 import 'models/notification_model.dart';
 import 'services/challenge_evaluator.dart';
@@ -65,6 +85,18 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 /// Background message handler for FCM
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Clean URLs on web so /vas and ?demo=1 work for telco SMS links.
+  if (kIsWeb) {
+    usePathUrlStrategy();
+  }
+  await VasSession.bootstrapFromUri();
+
+  // Disable HTTP fetching for Google Fonts on Web to prevent CORS/Network errors.
+  // The app will use the bundled fonts defined in pubspec.yaml instead.
+  if (kIsWeb) {
+    GoogleFonts.config.allowRuntimeFetching = false;
+  }
 
   // Catch all uncaught async errors that would otherwise silently kill the app
   FlutterError.onError = (FlutterErrorDetails details) {
@@ -83,6 +115,11 @@ void main() async {
     }
     return true; // Prevent crash
   };
+
+  // Register FCM background handler on mobile (must be before runApp)
+  if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  }
 
   // Background message handler is registered in mobile-specific code
   // Desktop platforms don't support Firebase Messaging
@@ -104,6 +141,8 @@ void main() async {
   }
 
   runApp(const MyApp());
+
+  NotificationNavigation.register(_navigateFromNotificationData);
 }
 
 class MyApp extends StatelessWidget {
@@ -142,6 +181,8 @@ class MyApp extends StatelessWidget {
         }),
         // School Course Provider for premium school mini courses feature
         ChangeNotifierProvider(create: (_) => SchoolCourseProvider()),
+        ChangeNotifierProvider(create: (_) => LibraryProvider()),
+        ChangeNotifierProvider(create: (_) => SchoolLibraryProvider()),
         Provider<BadgeService>(
           create: (context) {
             final badgeService = BadgeService();
@@ -214,8 +255,10 @@ class MyApp extends StatelessWidget {
           buildApp: (context) => _buildRoutedHome(context),
         ),
         routes: {
-          '/ai_chat': (context) => const AIChatScreen(),
+          '/ai_chat': (context) =>
+              const SubscriptionAccessGate(child: AIChatScreen()),
           '/login': (context) => const LoginScreen(),
+          '/vas': (context) => const VasPortalScreen(),
           '/onboarding': (context) => const OnboardingScreen(),
           '/home': (context) => const HomeScreen(),
           '/goals': (context) => const GoalsScreen(),
@@ -224,6 +267,10 @@ class MyApp extends StatelessWidget {
           '/victory_wall': (context) => const VictoryWallScreen(),
           '/leaderboard': (context) => const LeaderboardScreen(),
           '/hall-of-fame': (context) => const HallOfFameScreen(),
+          // '/quest-arena': (context) => const QuestArenaHomeScreen(),
+          '/lead-market': (context) => const LeadMarketSponsorsScreen(),
+          '/lead-market-history': (context) => const MyMarketOrdersScreen(),
+          '/sponsor-dashboard': (context) => const SponsorDashboardScreen(),
           '/splash-preview': (context) => GifSplashScreen(
                 gifAssetPath: 'assets/animations/MLQ-gif.gif',
                 nextScreen: const ProfileScreen(),
@@ -239,6 +286,7 @@ class MyApp extends StatelessWidget {
           '/achievements': (context) => const AchievementsScreen(),
           '/admin-login': (context) => const AdminLoginScreen(),
           '/admin-dashboard': (context) => const AdminDashboardScreen(),
+          '/admin-ai-challenge-generator': (context) => const AIChallengeGeneratorScreen(),
           '/admin-users': (context) => const AdminUsersScreen(),
           '/challenge-form': (context) => const ChallengeFormScreen(),
           '/challenge-participants': (context) =>
@@ -257,12 +305,26 @@ class MyApp extends StatelessWidget {
           },
           '/subscription-management': (context) =>
               const SubscriptionManagementScreen(),
+          '/invite-earn': (context) => const ReferralScreen(),
           '/class-code': (context) => const ClassCodeJoinScreen(),
           '/admin-school-onboarding': (context) =>
               const SchoolOnboardingScreen(),
           '/admin-job-runs': (context) => const JobRunsScreen(),
-          '/wallet': (context) => const WalletDashboardScreen(),
-          '/admin-reward-disbursements': (context) => const RewardDisbursementScreen(),
+          '/wallet': (context) =>
+              const SubscriptionAccessGate(child: WalletDashboardScreen()),
+          '/wallet-activation': (context) =>
+              const SubscriptionAccessGate(child: WalletActivationScreen()),
+          '/admin-reward-disbursements': (context) => const AdminGate(
+                child: RewardDisbursementScreen(),
+              ),
+          '/admin-withdrawals': (context) => const AdminGate(
+                child: RewardDisbursementScreen(initialTabIndex: 1),
+              ),
+          '/setup-security-questions': (context) {
+            final isModal =
+                ModalRoute.of(context)?.settings.arguments == true;
+            return SetupSecurityQuestionsScreen(isModal: isModal);
+          },
         },
       ),
     );
@@ -455,8 +517,9 @@ Widget _buildRoutedHome(BuildContext context) {
   return const _StableSplashRouter();
 }
 
-/// A wrapper that maintains a stable GifSplashScreen state across UserProvider notifications.
-/// This prevents the GIF from restarting and the timer from resetting, which stops the ANR.
+/// Root auth gate. Shows splash once, then swaps to Login/Onboarding/Home
+/// in place — never Navigator.pushReplacement — so Provider rebuilds
+/// (e.g. after editing parent email) cannot remount splash and loop.
 class _StableSplashRouter extends StatefulWidget {
   const _StableSplashRouter();
 
@@ -465,33 +528,84 @@ class _StableSplashRouter extends StatefulWidget {
 }
 
 class _StableSplashRouterState extends State<_StableSplashRouter> {
+  bool _splashComplete = false;
+  bool _vasReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _prepareVas();
+  }
+
+  Future<void> _prepareVas() async {
+    await VasSession.bootstrapFromUri(force: true);
+    VasSession.syncFromUriSync();
+    if (!mounted) return;
+    setState(() {
+      _vasReady = true;
+      // Skip splash for telco portal — go straight to VAS auth/shell.
+      if (VasSession.isActive) {
+        _splashComplete = true;
+      }
+    });
+  }
+
+  Widget _destinationFor(UserProvider userProvider) {
+    // Re-check URL every rebuild — Flutter web Uri.base can settle after first frame.
+    VasSession.syncFromUriSync();
+
+    final isInitialized = userProvider.isInitialized;
+    final isFirstTime = userProvider.isFirstTimeUser;
+    final preferLogin = userProvider.preferLogin;
+    final isAuthenticated = userProvider.isAuthenticated;
+
+    // Telco / SMS portal — never wrap in SubscriptionAccessGate.
+    if (VasSession.isActive) {
+      return const VasPortalScreen();
+    }
+
+    // A completed sign-in must win over a still-running init. Showing Login
+    // while Home is also mounting is what overlays LeadWallet on the auth
+    // screen and leaves the user stuck after "Welcome back".
+    if (isAuthenticated) {
+      return const MainNavigationScreen();
+    }
+    if (!isInitialized) {
+      return const LoginScreen();
+    }
+    if (isFirstTime && !preferLogin) {
+      return const OnboardingScreen();
+    }
+    return const LoginScreen();
+  }
+
   @override
   Widget build(BuildContext context) {
-    // We use a Selector or a limited Consumer so we only rebuild the routing logic
-    // not the entire GifSplashScreen container.
     return Consumer<UserProvider>(
       builder: (context, userProvider, _) {
-        final isInitialized = userProvider.isInitialized;
-        final isFirstTime = userProvider.isFirstTimeUser;
-        final isAuthenticated = userProvider.isAuthenticated;
-
-        Widget nextScreen;
-        if (isFirstTime) {
-          nextScreen = const OnboardingScreen();
-        } else if (!isAuthenticated) {
-          nextScreen = const LoginScreen();
-        } else {
-          nextScreen = const MainNavigationScreen();
+        // Wait one beat for VAS path detection on web before choosing flow.
+        if (!_vasReady && kIsWeb) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
         }
 
-        // The key ensures the state is preserved if possible.
-        // We pass isInitialized to the splash screen so it can decide when to proceed.
-        return GifSplashScreen(
-          key: const ValueKey('main_splash'),
-          gifAssetPath: 'assets/animations/MLQ-gif.gif',
-          nextScreen: nextScreen,
-          minDisplayTime: const Duration(seconds: 2),
-        );
+        final destination = _destinationFor(userProvider);
+
+        if (!_splashComplete && !VasSession.isActive) {
+          return GifSplashScreen(
+            key: const ValueKey('main_splash'),
+            gifAssetPath: 'assets/animations/MLQ-gif.gif',
+            minDisplayTime: const Duration(seconds: 2),
+            readyToNavigate: userProvider.isInitialized,
+            onFinished: () {
+              if (!mounted) return;
+              setState(() => _splashComplete = true);
+            },
+          );
+        }
+
+        return destination;
       },
     );
   }
@@ -556,7 +670,9 @@ class _AppInitializerState extends State<AppInitializer> {
   static bool _globalInitStarted = false;
 
   Future<void> _initializeAllServices() async {
-    if (_globalInitStarted) return;
+    // After a hot restart the UI/static flags can survive while the Supabase
+    // singleton is torn down — always re-run init when Supabase is not ready.
+    if (_globalInitStarted && SupabaseService.instance.isReady) return;
     _globalInitStarted = true;
 
     // STAGGERED START: Give the UI thread (Splash GIF) 2s to settle and 
@@ -659,6 +775,14 @@ class _AppInitializerState extends State<AppInitializer> {
         required: false,
       );
 
+      // Capture mlq://invite?ref= and https://mlq.app/invite?ref= deep links
+      await _runStep(
+        name: 'Referral invite links',
+        action: () => ReferralService().startInviteLinkListener(),
+        timeout: const Duration(seconds: 5),
+        required: false,
+      );
+
       if (kDebugMode) debugPrint('[Startup] Background initialization complete');
     } catch (e) {
       if (kDebugMode) debugPrint('[Startup][Background] Error: $e');
@@ -668,15 +792,23 @@ class _AppInitializerState extends State<AppInitializer> {
 
   Future<void> _configureFlutterwave(ConfigService config) async {
     try {
-      // Use production key in release mode
-      final isProduction = kReleaseMode;
-      final publicKey = isProduction
-          ? 'FLWPUBK-PRODUCTION-KEY-HERE'  // Replace with your production key
-          : 'FLWPUBK_TEST-4f83c90e73b19c538cf08565813d7b32-X';
-      
+      // Public key comes from ConfigService / --dart-define=FLW_PUBLIC_KEY.
+      // Checkout itself uses the server-side flutterwave_init_payment edge function.
+      final publicKey = await config.getFlutterwavePublicKey();
+      final isTestMode = await config.getFlutterwaveIsTestMode();
+
       await config.setFlutterwavePublicKey(publicKey);
-      await config.setFlutterwaveIsTestMode(!isProduction);
-      await config.setFlutterwaveRedirectUrl('https://mlq.app/redirect');
+      await config.setFlutterwaveIsTestMode(isTestMode);
+      await config.setFlutterwaveRedirectUrl(
+        FlutterwaveService.paymentRedirectUrl,
+      );
+
+      if (kDebugMode) {
+        debugPrint(
+          '[Startup] Flutterwave public key ready '
+          '(testMode=$isTestMode, prefix=${publicKey.substring(0, 12)}...)',
+        );
+      }
     } catch (e) {
       if (kDebugMode) debugPrint('[Startup] Flutterwave config failed: $e');
     }
@@ -695,6 +827,7 @@ class _AppInitializerState extends State<AppInitializer> {
       // Initialize AI services (synchronous, fast)
       AiCoachService.instance.initialize(apiKey);
       AiCourseGeneratorService.instance.initialize(apiKey);
+      AIChallengeGeneratorService.instance.initialize();
       AutonomousCoachService.instance.initialize();
       UnifiedAutonomousCoach.instance.initialize();
       
@@ -840,13 +973,18 @@ extension _WeeklyReportSender on _MainNavigationScreenState {
 }
 
 void _handleNotificationTap(dynamic message) {
-  try {
-    // On mobile, message is RemoteMessage with .data property
-    // On desktop, message is null (notifications not supported)
-    if (message == null) return;
+  NotificationNavigation.handleTap(NotificationNavigation.dataFromMessage(message));
+}
 
-    final data = message.data as Map<String, dynamic>? ?? {};
+void _navigateFromNotificationData(Map<String, dynamic> data) {
+  try {
     final type = (data['type'] ?? '').toString();
+    final relatedId = (data['related_id'] ?? '').toString();
+
+    if (relatedId == 'victory_wall') {
+      navigatorKey.currentState?.pushNamed('/victory_wall');
+      return;
+    }
 
     switch (type) {
       case 'challenge':
@@ -856,6 +994,7 @@ void _handleNotificationTap(dynamic message) {
         navigatorKey.currentState?.pushNamed('/leaderboard');
         break;
       case 'goal':
+      case 'goal_reminder':
         navigatorKey.currentState?.pushNamed('/goals');
         break;
       case 'system':
@@ -863,19 +1002,28 @@ void _handleNotificationTap(dynamic message) {
         navigatorKey.currentState?.pushNamed('/home');
         break;
     }
-  } catch (e) {
-    // Fails silently; navigation is best-effort.
+  } catch (_) {
+    // Navigation is best-effort.
   }
 }
 
-class MainNavigationScreen extends StatefulWidget {
+class MainNavigationScreen extends StatelessWidget {
   const MainNavigationScreen({super.key});
 
   @override
-  State<MainNavigationScreen> createState() => _MainNavigationScreenState();
+  Widget build(BuildContext context) {
+    return const _MainNavigationBody();
+  }
 }
 
-class _MainNavigationScreenState extends State<MainNavigationScreen> {
+class _MainNavigationBody extends StatefulWidget {
+  const _MainNavigationBody();
+
+  @override
+  State<_MainNavigationBody> createState() => _MainNavigationScreenState();
+}
+
+class _MainNavigationScreenState extends State<_MainNavigationBody> {
   int _selectedIndex = 0;
   StreamSubscription? _inAppNotifSub;
   StreamSubscription<ChallengeCompletionEvent>? _challengeCompletionSub;
@@ -891,6 +1039,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   ];
 
   void _onItemTapped(int index) {
+    if (index < 0 || index >= _screens.length) return;
     setState(() {
       _selectedIndex = index;
     });
@@ -904,6 +1053,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   @override
   void initState() {
     super.initState();
+    AppTabNavigation.register(_onItemTapped);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      NotificationNavigation.flushPending();
+    });
     
     // Delay ALL initialization until UI is stable (2 seconds after first frame)
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -974,6 +1128,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       // Initialize providers without blocking (fire and forget)
       Future.microtask(() async {
         try {
+          await userProvider.refreshEntitlements();
+
           // Initialize GoalProvider
           goalProvider.setUserProvider(userProvider);
           await goalProvider.initGoals();
@@ -1306,7 +1462,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
               )
             ],
           ),
-          backgroundColor: const Color(0xFF00C4FF),
+          backgroundColor: AppColors.primary,
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 5),
         ),
@@ -1327,6 +1483,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   @override
   void dispose() {
+    AppTabNavigation.unregister();
     _inAppNotifSub?.cancel();
     _challengeCompletionSub?.cancel();
     super.dispose();
@@ -1340,6 +1497,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         final isDesktop = constraints.maxWidth >= 900;
 
         return Scaffold(
+          backgroundColor: AppColors.background,
           body: Row(
             children: [
               if (isDesktop)
@@ -1375,12 +1533,37 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                   ],
                 ),
               Expanded(
-                child: Stack(
-                  children: [
-                    // Main screen content
-                    _screens[_selectedIndex],
-                    // Additional overlays can go here
-                  ],
+                child: Theme(
+                  // Desktop: square AppBars so purple rail + bar form one continuous edge
+                  data: Theme.of(context).copyWith(
+                    scaffoldBackgroundColor: Colors.transparent,
+                    appBarTheme: Theme.of(context).appBarTheme.copyWith(
+                      shape: isDesktop
+                          ? const RoundedRectangleBorder(
+                              borderRadius: BorderRadius.zero,
+                            )
+                          : const RoundedRectangleBorder(
+                              borderRadius: BorderRadius.vertical(
+                                bottom: Radius.circular(20),
+                              ),
+                            ),
+                    ),
+                  ),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      const ColoredBox(color: AppColors.background),
+                      Opacity(
+                        opacity: 0.28,
+                        child: Image.asset(
+                          AppAssets.uiBgMesh,
+                          fit: BoxFit.cover,
+                          alignment: Alignment.topCenter,
+                        ),
+                      ),
+                      _screens[_selectedIndex],
+                    ],
+                  ),
                 ),
               ),
             ],

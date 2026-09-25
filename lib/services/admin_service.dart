@@ -42,15 +42,35 @@ class AdminService {
     }
   }
 
+  /// Every school, for app admins. Throws if the caller is not an app admin.
+  Future<List<Map<String, dynamic>>> getAdminSchoolsForLeaderboard() async {
+    final response = await _client.rpc('get_admin_schools_for_leaderboard');
+    return List<Map<String, dynamic>>.from(response as List);
+  }
+
+  /// Full monthly leaderboard for one school. App admins only.
+  Future<List<Map<String, dynamic>>> getAdminSchoolLeaderboard(
+    String schoolId, {
+    int limit = 100,
+  }) async {
+    final response = await _client.rpc('get_admin_school_leaderboard', params: {
+      'p_school_id': schoolId,
+      'p_limit': limit,
+    });
+    return List<Map<String, dynamic>>.from(response as List);
+  }
+
   Future<int> sendMonthlyWinnersCongrats({DateTime? now}) async {
     try {
       final n = now ?? DateTime.now();
-      final monthKey = '${n.year.toString().padLeft(4, '0')}-${n.month.toString().padLeft(2, '0')}';
+      final monthKey =
+          '${n.year.toString().padLeft(4, '0')}-${n.month.toString().padLeft(2, '0')}';
       final winners = await getTopMonthlyUsers(limit: 3);
       if (winners.isEmpty) return 0;
 
-      final List<Map<String, dynamic>> inserts = [];
+      var notifiedCount = 0;
       final List<Map<String, dynamic>> winnerUpserts = [];
+
       for (var i = 0; i < winners.length; i++) {
         final row = winners[i];
         final userId = (row['id'] ?? '').toString();
@@ -75,15 +95,19 @@ class AdminService {
             ? 'You topped the MLQ Monthly Leaderboard for $monthKey. Your consistency is legendary — keep leading by example!'
             : 'You placed #$rank on the MLQ Monthly Leaderboard for $monthKey. Amazing effort — keep going!';
 
-        inserts.add({
-          'user_id': userId,
-          'title': title,
-          'message': message,
-          'type': 'leaderboard',
-          'related_id': relatedId,
-          'is_read': false,
-          'created_at': DateTime.now().toIso8601String(),
-        });
+        try {
+          await _client.rpc('admin_notify_users', params: {
+            'p_user_ids': [userId],
+            'p_title': title,
+            'p_message': message,
+            'p_type': 'leaderboard',
+            'p_related_id': relatedId,
+            'p_enqueue_push': true,
+          });
+          notifiedCount++;
+        } catch (e) {
+          debugPrint('Error notifying monthly winner $userId: $e');
+        }
 
         winnerUpserts.add({
           'month_key': monthKey,
@@ -97,11 +121,6 @@ class AdminService {
         });
       }
 
-      if (inserts.isEmpty) return 0;
-      await _client.from('notifications').insert(inserts);
-
-      // Also persist the monthly winners snapshot for Hall of Fame.
-      // Idempotent by (month_key, rank) unique index.
       if (winnerUpserts.isNotEmpty) {
         try {
           await _client
@@ -111,7 +130,7 @@ class AdminService {
           debugPrint('Error upserting monthly_winners: $e');
         }
       }
-      return inserts.length;
+      return notifiedCount;
     } catch (e) {
       debugPrint('Error sending monthly winners congrats: $e');
       return 0;
@@ -392,8 +411,16 @@ class AdminService {
         return false;
       }
 
-      // 3. Add XP to the user's profile (using existing SupabaseService method)
-      await _supabaseService.addXpToUser(userId, xpAmount);
+      // 3. Award XP via admin RPC (server-authoritative)
+      final ok = await _supabaseService.adminAwardXpToUser(
+        userId,
+        xpAmount,
+        reason: 'Challenge completion: $challengeId',
+      );
+      if (!ok) {
+        debugPrint('Failed to award XP via admin_award_xp for user $userId');
+        return false;
+      }
 
       // 4. If markAsWinner is true, update the participant record to indicate winner status
       if (markAsWinner) {
@@ -708,6 +735,7 @@ class AdminService {
     required String message,
     String priority = 'normal',
     DateTime? endTime,
+    bool notifyAll = true,
   }) async {
     try {
       final userId = _client.auth.currentUser?.id;
@@ -722,51 +750,25 @@ class AdminService {
         'created_by': userId,
       });
 
-      // Also create notifications for all users with FCM tokens
-      await _sendMaintenanceNotificationToAllUsers(title, message, priority);
+      final displayTitle =
+          priority == 'critical' ? '⚠️ $title' : '📢 $title';
 
+      final count = await _client.rpc('admin_broadcast_notification', params: {
+        'p_title': displayTitle,
+        'p_message': message,
+        'p_type': 'system',
+        'p_related_id': endTime != null
+            ? 'maintenance:${endTime.toUtc().toIso8601String()}'
+            : 'maintenance',
+        'p_enqueue_push': notifyAll,
+      });
+
+      debugPrint(
+          'Maintenance notice broadcast to ${count ?? 0} users via admin_broadcast_notification');
       return true;
     } catch (e) {
       debugPrint('Error creating maintenance notice: $e');
       return false;
-    }
-  }
-
-  /// Send push notification to all users about maintenance
-  Future<void> _sendMaintenanceNotificationToAllUsers(
-    String title,
-    String message,
-    String priority,
-  ) async {
-    try {
-      // Insert notifications for all users
-      final users =
-          await _client.from('profiles').select('id').not('id', 'is', null);
-
-      final notifications = (users as List)
-          .map((user) => {
-                'user_id': user['id'],
-                'title': priority == 'critical' ? '⚠️ $title' : '📢 $title',
-                'message': message,
-                'type': 'system',
-                'is_read': false,
-                'created_at': DateTime.now().toIso8601String(),
-              })
-          .toList();
-
-      if (notifications.isNotEmpty) {
-        // Insert in batches to avoid timeout
-        const batchSize = 100;
-        for (var i = 0; i < notifications.length; i += batchSize) {
-          final batch = notifications.skip(i).take(batchSize).toList();
-          await _client.from('notifications').insert(batch);
-        }
-      }
-
-      debugPrint(
-          'Sent maintenance notification to ${notifications.length} users');
-    } catch (e) {
-      debugPrint('Error sending maintenance notifications: $e');
     }
   }
 
@@ -823,6 +825,119 @@ class AdminService {
       return true;
     } catch (e) {
       debugPrint('Error deleting maintenance notice: $e');
+      return false;
+    }
+  }
+
+  // ===== Victory Wall Admin Posts & Polls =====
+
+  Future<String?> createAdminAnnouncement({
+    required String title,
+    required String content,
+    String priority = 'normal',
+    bool isPinned = true,
+    DateTime? expiresAt,
+    bool notifyAll = true,
+  }) async {
+    try {
+      final postId = await _client.rpc('create_admin_announcement', params: {
+        'p_title': title,
+        'p_content': content,
+        'p_priority': priority,
+        'p_is_pinned': isPinned,
+        'p_expires_at': expiresAt?.toUtc().toIso8601String(),
+      });
+
+      if (notifyAll) {
+        await _sendVictoryWallNotificationToAllUsers(
+          title: priority == 'critical' ? '⚠️ $title' : '📢 $title',
+          message: content,
+        );
+      }
+
+      return postId?.toString();
+    } catch (e) {
+      debugPrint('Error creating admin announcement: $e');
+      return null;
+    }
+  }
+
+  Future<String?> createAdminPoll({
+    required String question,
+    required List<String> options,
+    bool isPinned = true,
+    DateTime? expiresAt,
+    bool notifyAll = true,
+  }) async {
+    try {
+      final cleaned =
+          options.map((o) => o.trim()).where((o) => o.isNotEmpty).toList();
+      if (cleaned.length < 2) return null;
+
+      final postId = await _client.rpc('create_admin_poll', params: {
+        'p_question': question,
+        'p_options': cleaned,
+        'p_is_pinned': isPinned,
+        'p_expires_at': expiresAt?.toUtc().toIso8601String(),
+      });
+
+      if (notifyAll) {
+        await _sendVictoryWallNotificationToAllUsers(
+          title: '🗳️ New community poll',
+          message: question,
+        );
+      }
+
+      return postId?.toString();
+    } catch (e) {
+      debugPrint('Error creating admin poll: $e');
+      return null;
+    }
+  }
+
+  Future<void> _sendVictoryWallNotificationToAllUsers({
+    required String title,
+    required String message,
+  }) async {
+    try {
+      await _client.rpc('admin_broadcast_notification', params: {
+        'p_title': title,
+        'p_message': message,
+        'p_type': 'system',
+        'p_related_id': 'victory_wall',
+        'p_enqueue_push': true,
+      });
+    } catch (e) {
+      debugPrint('Error sending victory wall notifications: $e');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getAdminVictoryPosts() async {
+    try {
+      final response = await _client
+          .from('posts')
+          .select(
+              'id, content, title, post_type, is_pinned, priority, expires_at, created_at')
+          .inFilter('post_type', ['admin_announcement', 'poll'])
+          .order('created_at', ascending: false)
+          .limit(50);
+      return List<Map<String, dynamic>>.from(response as List);
+    } catch (e) {
+      debugPrint('Error fetching admin victory posts: $e');
+      return [];
+    }
+  }
+
+  /// Delete an admin announcement or poll (and cascaded poll options/votes).
+  Future<bool> deleteAdminVictoryPost(String postId) async {
+    try {
+      final result = await _client.rpc(
+        'delete_victory_post',
+        params: {'p_post_id': postId},
+      );
+      return result == true;
+    } catch (e) {
+      debugPrint('Error deleting admin victory post: $e');
       return false;
     }
   }

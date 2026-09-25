@@ -3,6 +3,22 @@ import 'package:google_fonts/google_fonts.dart';
 import '../constants/app_constants.dart';
 
 class AppTheme {
+  /// Desktop breakpoint used by the main shell (side nav).
+  static const double desktopBreakpoint = 900;
+
+  static bool isDesktop(BuildContext context) =>
+      MediaQuery.sizeOf(context).width >= desktopBreakpoint;
+
+  /// Rounded bottom on mobile; square on desktop so AppBar meets the side rail cleanly.
+  static ShapeBorder? appBarShape(BuildContext context) {
+    if (isDesktop(context)) {
+      return const RoundedRectangleBorder(borderRadius: BorderRadius.zero);
+    }
+    return const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+    );
+  }
+
   // Get the app's theme data
   static ThemeData getThemeData() {
     // Use Google Fonts Nunito for a friendly, modern look
@@ -108,62 +124,69 @@ class AppTheme {
         tertiary: AppColors.tertiary,
         error: AppColors.error,
         onPrimary: Colors.white,
-        onSecondary: Colors.white,
+        onSecondary: AppColors.textOnGold,
         onTertiary: Colors.black,
         onError: Colors.white,
         background: AppColors.background,
         surface: AppColors.surface,
       ),
-      // Use consistent Poppins text theme throughout the app
+      // Nunito text theme throughout the app
       textTheme: textTheme,
-      scaffoldBackgroundColor: AppColors.background, // Ensure all screens use neumorphic background
+      scaffoldBackgroundColor: AppColors.background,
       appBarTheme: AppBarTheme(
         backgroundColor: AppColors.primary,
-        foregroundColor: Colors.black,
+        foregroundColor: AppColors.textOnPrimary,
         elevation: 0,
+        scrolledUnderElevation: 0,
         centerTitle: true,
-        titleTextStyle: AppTextStyles.heading2,
+        iconTheme: const IconThemeData(color: AppColors.textOnPrimary),
+        titleTextStyle: AppTextStyles.heading2.copyWith(
+          color: AppColors.textOnPrimary,
+        ),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(
+            bottom: Radius.circular(22),
+          ),
+        ),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: AppColors.secondary,
-          foregroundColor: Colors.white,
-          elevation: 0, // Remove default elevation for neumorphic
-          shadowColor: Colors.transparent,
+          backgroundColor: AppColors.primary,
+          foregroundColor: AppColors.textOnPrimary,
+          elevation: 0,
+          shadowColor: AppColors.primary.withValues(alpha: 0.35),
           padding: const EdgeInsets.symmetric(
-            vertical: 12,
+            vertical: 14,
             horizontal: 24,
           ),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(18),
           ),
           textStyle: AppTextStyles.button,
-        ).copyWith(
-          // Custom neumorphic shadow will be applied in widgets
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          foregroundColor: AppColors.secondary,
-          side: const BorderSide(color: AppColors.secondary, width: 2),
+          foregroundColor: AppColors.primary,
+          side: const BorderSide(color: AppColors.primary, width: 1.5),
           padding: const EdgeInsets.symmetric(
             vertical: 12,
             horizontal: 24,
           ),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(AppSizes.radiusM),
           ),
-          textStyle: AppTextStyles.button.copyWith(color: AppColors.secondary),
+          textStyle: AppTextStyles.button.copyWith(color: AppColors.primary),
         ),
       ),
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
-          foregroundColor: AppColors.secondary,
+          foregroundColor: AppColors.primary,
           padding: const EdgeInsets.symmetric(
             vertical: 8,
             horizontal: 16,
           ),
-          textStyle: AppTextStyles.button.copyWith(color: AppColors.secondary),
+          textStyle: AppTextStyles.button.copyWith(color: AppColors.primary),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
@@ -173,7 +196,6 @@ class AppTheme {
           vertical: 16,
           horizontal: 16,
         ),
-        // Use Nunito for input text
         labelStyle: GoogleFonts.nunito(
           fontSize: 14,
           fontWeight: FontWeight.w500,
@@ -181,24 +203,24 @@ class AppTheme {
         ),
         floatingLabelStyle: GoogleFonts.nunito(
           fontSize: 14,
-          fontWeight: FontWeight.w500,
+          fontWeight: FontWeight.w600,
           color: AppColors.primary,
         ),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: AppColors.secondary, width: 2),
+          borderRadius: BorderRadius.circular(AppSizes.radiusM),
+          borderSide: const BorderSide(color: AppColors.border, width: 1.5),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: AppColors.secondary, width: 2),
+          borderRadius: BorderRadius.circular(AppSizes.radiusM),
+          borderSide: const BorderSide(color: AppColors.border, width: 1.5),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(AppSizes.radiusM),
           borderSide: const BorderSide(color: AppColors.primary, width: 2),
         ),
         errorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: AppColors.error, width: 2),
+          borderRadius: BorderRadius.circular(AppSizes.radiusM),
+          borderSide: const BorderSide(color: AppColors.error, width: 1.5),
         ),
         hintStyle: GoogleFonts.nunito(
           fontSize: 14,
@@ -211,25 +233,32 @@ class AppTheme {
           color: AppColors.error,
         ),
       ),
-      // Updated for Flutter 3.38: use CardThemeData instead of CardTheme
-      cardTheme: const CardThemeData(
-        elevation: 0, // Remove elevation for neumorphic design
+      cardTheme: CardThemeData(
+        elevation: 0,
         color: AppColors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppSizes.radiusL),
+          side: const BorderSide(color: AppColors.border),
+        ),
+        margin: EdgeInsets.zero,
       ),
-      // Updated for Flutter 3.38: use DialogThemeData instead of DialogTheme
-      dialogTheme: const DialogThemeData(
+      dialogTheme: DialogThemeData(
         backgroundColor: AppColors.surface,
-        elevation: 0, // Remove elevation for neumorphic design
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppSizes.radiusL),
+        ),
       ),
       progressIndicatorTheme: const ProgressIndicatorThemeData(
-        color: AppColors.secondary,
-        linearTrackColor: Colors.grey,
+        color: AppColors.primary,
+        linearTrackColor: AppColors.surfaceMuted,
       ),
       snackBarTheme: SnackBarThemeData(
-        backgroundColor: AppColors.secondary,
-        contentTextStyle: AppTextStyles.body.copyWith(color: Colors.white),
+        backgroundColor: AppColors.primaryDark,
+        contentTextStyle:
+            AppTextStyles.body.copyWith(color: AppColors.textOnPrimary),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppSizes.radiusS),
         ),
         behavior: SnackBarBehavior.floating,
       ),
@@ -238,12 +267,12 @@ class AppTheme {
         selectedItemColor: AppColors.primary,
         unselectedItemColor: AppColors.textSecondary,
         type: BottomNavigationBarType.fixed,
-        elevation: 8,
+        elevation: 0,
       ),
     );
   }
 
-  // Get a decoration for a neumorphic card
+  /// Soft brand surface (preferred over old neumorphic dual-shadow).
   static BoxDecoration getNeumorphicDecoration({
     double borderRadius = 16,
     Color? color,
@@ -251,26 +280,14 @@ class AppTheme {
     return BoxDecoration(
       color: color ?? AppColors.surface,
       borderRadius: BorderRadius.circular(borderRadius),
-      boxShadow: [
-        BoxShadow(
-          color: AppColors.neumorphicDark,
-          offset: const Offset(4, 4),
-          blurRadius: 8,
-          spreadRadius: 0,
-        ),
-        BoxShadow(
-          color: AppColors.neumorphicHighlight,
-          offset: const Offset(-4, -4),
-          blurRadius: 8,
-          spreadRadius: 0,
-        ),
-      ],
+      border: Border.all(color: AppColors.border),
+      boxShadow: NeumorphicStyles.softShadow,
     );
   }
 
   // Get a gradient decoration
   static BoxDecoration getGradientDecoration({
-    List<Color> colors = const [AppColors.primary, AppColors.secondary],
+    List<Color> colors = const [AppColors.primary, AppColors.primaryDark],
     double borderRadius = 16,
     AlignmentGeometry begin = Alignment.topLeft,
     AlignmentGeometry end = Alignment.bottomRight,
@@ -299,28 +316,14 @@ class AppTheme {
     }
   }
 
-  // Get pressed neumorphic decoration
   static BoxDecoration getPressedNeumorphicDecoration({
     double borderRadius = 16,
     Color? color,
   }) {
     return BoxDecoration(
-      color: color ?? AppColors.surface,
+      color: color ?? AppColors.surfaceMuted,
       borderRadius: BorderRadius.circular(borderRadius),
-      boxShadow: [
-        BoxShadow(
-          color: AppColors.neumorphicDark,
-          offset: const Offset(-2, -2),
-          blurRadius: 4,
-          spreadRadius: 0,
-        ),
-        BoxShadow(
-          color: AppColors.neumorphicHighlight,
-          offset: const Offset(2, 2),
-          blurRadius: 4,
-          spreadRadius: 0,
-        ),
-      ],
+      border: Border.all(color: AppColors.border),
     );
   }
 }

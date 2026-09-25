@@ -26,6 +26,7 @@ class _WithdrawalBankSetupScreenState extends State<WithdrawalBankSetupScreen> {
   bool _isLoadingBanks = true;
   bool _isValidating = false;
   bool _isAccountValidated = false;
+  bool _isFlutterwaveSandbox = false;
   List<Map<String, dynamic>> _banks = [];
   Map<String, dynamic>? _selectedBank;
   String? _accountName;
@@ -46,10 +47,61 @@ class _WithdrawalBankSetupScreenState extends State<WithdrawalBankSetupScreen> {
   Future<void> _loadBanks() async {
     setState(() => _isLoadingBanks = true);
     final banks = await _walletService.getNigerianBanks();
+    // Normalize + sort so the picker is stable (code is the identity key).
+    final normalized = banks
+        .map((b) => {
+              'code': (b['code'] ?? '').toString(),
+              'name': (b['name'] ?? '').toString(),
+              if (b['id'] != null) 'id': b['id'],
+            })
+        .where((b) => (b['code'] as String).isNotEmpty && (b['name'] as String).isNotEmpty)
+        .toList()
+      ..sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
+
     setState(() {
-      _banks = banks;
+      _banks = normalized;
+      _isFlutterwaveSandbox = _walletService.isFlutterwaveSandbox;
       _isLoadingBanks = false;
+      // Keep selection if still in list (by code), else clear.
+      if (_selectedBank != null) {
+        final code = _selectedBank!['code']?.toString();
+        Map<String, dynamic>? match;
+        for (final b in normalized) {
+          if (b['code']?.toString() == code) {
+            match = b;
+            break;
+          }
+        }
+        _selectedBank = match;
+      }
     });
+  }
+
+  Future<void> _openBankPicker() async {
+    if (_banks.isEmpty) {
+      setState(() => _errorMessage = 'No banks available. Pull to refresh or try again.');
+      return;
+    }
+
+    final selected = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _BankPickerSheet(
+        banks: _banks,
+        selectedCode: _selectedBank?['code']?.toString(),
+        sandboxMode: _isFlutterwaveSandbox,
+      ),
+    );
+
+    if (selected != null && mounted) {
+      setState(() {
+        _selectedBank = selected;
+        _isAccountValidated = false;
+        _accountName = null;
+        _errorMessage = null;
+      });
+    }
   }
 
   Future<void> _validateAccount() async {
@@ -98,14 +150,23 @@ class _WithdrawalBankSetupScreenState extends State<WithdrawalBankSetupScreen> {
     }
 
     try {
-      // Save to database
-      await SupabaseService().client.from('profiles').update({
-        'withdrawal_bank_code': _selectedBank!['code'],
-        'withdrawal_bank_name': _selectedBank!['name'],
-        'withdrawal_account_number': _accountNumberController.text,
-        'withdrawal_account_name': _accountName,
-        'withdrawal_account_verified_at': DateTime.now().toIso8601String(),
-      }).eq('id', user.id);
+      // Save via secure RPC. Direct writes to withdrawal_* columns are
+      // blocked by the profiles guard trigger; only this SECURITY DEFINER
+      // function may persist verified bank details for the caller.
+      final rpcResult = await SupabaseService().client.rpc(
+        'save_withdrawal_bank',
+        params: {
+          'p_bank_code': _selectedBank!['code'],
+          'p_bank_name': _selectedBank!['name'],
+          'p_account_number': _accountNumberController.text,
+          'p_account_name': _accountName,
+        },
+      );
+
+      final resultMap = Map<String, dynamic>.from(rpcResult as Map);
+      if (resultMap['success'] != true) {
+        throw Exception(resultMap['error'] ?? 'Failed to save bank account');
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -167,7 +228,9 @@ class _WithdrawalBankSetupScreenState extends State<WithdrawalBankSetupScreen> {
                   children: [
                     // Header
                     _buildHeader(),
-                    const SizedBox(height: 32),
+                    const SizedBox(height: 16),
+                    if (_isFlutterwaveSandbox) _buildSandboxBanner(),
+                    const SizedBox(height: 16),
 
                     // Bank selection
                     _buildBankDropdown(),
@@ -252,7 +315,39 @@ class _WithdrawalBankSetupScreenState extends State<WithdrawalBankSetupScreen> {
     ).animate().fadeIn(duration: 500.ms).slideY(begin: 0.2, end: 0);
   }
 
+  Widget _buildSandboxBanner() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF8E1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFFD700).withOpacity(0.5)),
+      ),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.science_outlined, color: Color(0xFFE5A800), size: 22),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Flutterwave is still in TEST mode — only Access Bank appears here. '
+              'To add your real bank, switch Supabase secrets to live Flutterwave V3 keys, '
+              'then reopen this screen.',
+              style: TextStyle(
+                fontFamily: 'Nunito',
+                fontSize: 12,
+                color: Color(0xFF5D4E00),
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildBankDropdown() {
+    final selectedName = _selectedBank?['name']?.toString();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -266,41 +361,52 @@ class _WithdrawalBankSetupScreenState extends State<WithdrawalBankSetupScreen> {
           ),
         ),
         const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          decoration: BoxDecoration(
-            color: Colors.white,
+        Material(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          child: InkWell(
+            onTap: _openBankPicker,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.grey.shade300),
-          ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<Map<String, dynamic>>(
-              isExpanded: true,
-              value: _selectedBank,
-              hint: const Text('Choose your bank'),
-              items: _banks.map((bank) {
-                return DropdownMenuItem(
-                  value: bank,
-                  child: Text(
-                    bank['name'],
-                    style: const TextStyle(
-                      fontFamily: 'Nunito',
-                      fontSize: 14,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      selectedName?.isNotEmpty == true
+                          ? selectedName!
+                          : 'Choose your bank',
+                      style: TextStyle(
+                        fontFamily: 'Nunito',
+                        fontSize: 14,
+                        fontWeight: selectedName != null
+                            ? FontWeight.w600
+                            : FontWeight.w500,
+                        color: selectedName != null
+                            ? const Color(0xFF1A1A2E)
+                            : Colors.grey.shade600,
+                      ),
                     ),
                   ),
-                );
-              }).toList(),
-              onChanged: (bank) {
-                setState(() {
-                  _selectedBank = bank;
-                  _isAccountValidated = false;
-                  _accountName = null;
-                  _errorMessage = null;
-                });
-              },
+                  Icon(Icons.keyboard_arrow_down_rounded, color: Colors.grey.shade700),
+                ],
+              ),
             ),
           ),
         ),
+        if (_banks.isEmpty) ...[
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: _loadBanks,
+            icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('Retry loading banks'),
+          ),
+        ],
       ],
     ).animate().fadeIn(duration: 500.ms, delay: 100.ms).slideY(begin: 0.2, end: 0);
   }
@@ -482,5 +588,172 @@ class _WithdrawalBankSetupScreenState extends State<WithdrawalBankSetupScreen> {
         ),
       ),
     ).animate().fadeIn(duration: 500.ms, delay: 100.ms).slideY(begin: 0.2, end: 0);
+  }
+}
+
+/// Searchable bank list — avoids DropdownButton<Map> identity bugs on web.
+class _BankPickerSheet extends StatefulWidget {
+  const _BankPickerSheet({
+    required this.banks,
+    required this.selectedCode,
+    required this.sandboxMode,
+  });
+
+  final List<Map<String, dynamic>> banks;
+  final String? selectedCode;
+  final bool sandboxMode;
+
+  @override
+  State<_BankPickerSheet> createState() => _BankPickerSheetState();
+}
+
+class _BankPickerSheetState extends State<_BankPickerSheet> {
+  final _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  List<Map<String, dynamic>> get _filtered {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return widget.banks;
+    return widget.banks.where((b) {
+      final name = (b['name'] ?? '').toString().toLowerCase();
+      final code = (b['code'] ?? '').toString().toLowerCase();
+      return name.contains(q) || code.contains(q);
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filtered = _filtered;
+    final height = MediaQuery.of(context).size.height * 0.75;
+
+    return Container(
+      height: height,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        children: [
+          const SizedBox(height: 10),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey.shade300,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Select Bank',
+                    style: TextStyle(
+                      fontFamily: 'Nunito',
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF1A1A2E),
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+          ),
+          if (widget.sandboxMode)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text(
+                'Test mode: only Access Bank is available until live Flutterwave keys are configured.',
+                style: TextStyle(
+                  fontFamily: 'Nunito',
+                  fontSize: 12,
+                  color: Colors.grey.shade700,
+                ),
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: TextField(
+              controller: _searchController,
+              autofocus: !widget.sandboxMode,
+              onChanged: (v) => setState(() => _query = v),
+              decoration: InputDecoration(
+                hintText: 'Search bank name…',
+                prefixIcon: const Icon(Icons.search_rounded),
+                filled: true,
+                fillColor: const Color(0xFFF5F7FA),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: filtered.isEmpty
+                ? Center(
+                    child: Text(
+                      'No banks match “$_query”',
+                      style: TextStyle(
+                        fontFamily: 'Nunito',
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  )
+                : ListView.separated(
+                    itemCount: filtered.length,
+                    separatorBuilder: (_, __) => Divider(
+                      height: 1,
+                      color: Colors.grey.shade200,
+                    ),
+                    itemBuilder: (context, index) {
+                      final bank = filtered[index];
+                      final code = bank['code']?.toString() ?? '';
+                      final name = bank['name']?.toString() ?? '';
+                      final isSelected = code == widget.selectedCode;
+                      return ListTile(
+                        title: Text(
+                          name,
+                          style: TextStyle(
+                            fontFamily: 'Nunito',
+                            fontWeight:
+                                isSelected ? FontWeight.w800 : FontWeight.w600,
+                            color: const Color(0xFF1A1A2E),
+                          ),
+                        ),
+                        subtitle: Text(
+                          'Code $code',
+                          style: TextStyle(
+                            fontFamily: 'Nunito',
+                            fontSize: 12,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                        trailing: isSelected
+                            ? const Icon(Icons.check_circle_rounded,
+                                color: Color(0xFFE5A800))
+                            : null,
+                        onTap: () => Navigator.pop(context, bank),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
   }
 }

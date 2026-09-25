@@ -167,7 +167,8 @@ class CommunityCourseService {
         return CommunityMiniCourse.fromJson(
           json,
           communityName: communityData?['name'] as String?,
-          isCompleted: progress?['completed'] == true,
+          isCompleted: progress?['completed'] == true &&
+              ((progress?['score'] as num?)?.toInt() ?? 0) >= 70,
           score: (progress?['score'] as num?)?.toInt(),
         );
       }).toList();
@@ -203,7 +204,8 @@ class CommunityCourseService {
             .eq('community_course_id', response['id'])
             .maybeSingle();
         
-        isCompleted = progress?['completed'] == true;
+        isCompleted = progress?['completed'] == true &&
+            ((progress?['score'] as num?)?.toInt() ?? 0) >= 70;
         score = (progress?['score'] as num?)?.toInt();
       }
 
@@ -281,12 +283,13 @@ class CommunityCourseService {
       // Check if already completed
       final existing = await _supabase
           .from('user_community_course_progress')
-          .select('completed')
+          .select('completed, score')
           .eq('user_id', userId)
           .eq('community_course_id', courseId)
           .maybeSingle();
 
-      if (existing?['completed'] == true) {
+      if (existing?['completed'] == true &&
+          ((existing?['score'] as num?)?.toInt() ?? 0) >= 70) {
         return {
           'rewards_granted': false,
           'already_completed': true,
@@ -295,7 +298,17 @@ class CommunityCourseService {
         };
       }
 
-      // Record completion (no XP/coins for community courses)
+      // Record completion only when the quiz is actually passed.
+      if (score < 70) {
+        return {
+          'rewards_granted': false,
+          'already_completed': false,
+          'xp_awarded': 0,
+          'coins_awarded': 0,
+          'reason': 'score_too_low',
+        };
+      }
+
       await _supabase.from('user_community_course_progress').upsert({
         'user_id': userId,
         'community_course_id': courseId,
@@ -325,12 +338,13 @@ class CommunityCourseService {
 
       final response = await _supabase
           .from('user_community_course_progress')
-          .select('completed')
+          .select('completed, score')
           .eq('user_id', userId)
           .eq('community_course_id', courseId)
           .maybeSingle();
 
-      return response?['completed'] == true;
+      return response?['completed'] == true &&
+          ((response?['score'] as num?)?.toInt() ?? 0) >= 70;
     } catch (e) {
       return false;
     }

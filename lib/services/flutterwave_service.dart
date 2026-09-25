@@ -6,6 +6,18 @@ class FlutterwaveService {
   factory FlutterwaveService() => _instance;
   FlutterwaveService._internal();
 
+  /// Stable HTTPS redirect used after checkout.
+  /// Do not use https://mlq.app/redirect — that host currently returns HTTP 500.
+  static const paymentRedirectUrl =
+      'https://hcvyumbkonrisrxbjnst.supabase.co/functions/v1/payment-redirect';
+
+  /// Payment methods shown on Flutterwave checkout (NGN).
+  /// Requires Bank Transfer enabled under Flutterwave → Settings →
+  /// Business Preferences → Payment Methods. If "Enable Dashboard Payment
+  /// Options" is ON, dashboard toggles override this list.
+  static const String defaultPaymentOptions =
+      'card,banktransfer,ussd,account';
+
   final SupabaseClient _supabase = Supabase.instance.client;
 
   /// Initialize payment and get payment link
@@ -19,6 +31,7 @@ class FlutterwaveService {
     required String redirectUrl,
     String? phoneNumber,
     Map<String, dynamic>? meta,
+    String paymentOptions = defaultPaymentOptions,
   }) async {
     try {
       debugPrint('🔑 [FlutterwaveService] Initializing payment...');
@@ -26,6 +39,7 @@ class FlutterwaveService {
       debugPrint('🔑 Currency: $currency');
       debugPrint('🔑 TxRef: $txRef');
       debugPrint('🔑 Email: $email');
+      debugPrint('🔑 Payment options: $paymentOptions');
 
       // Use Edge Function to initialize payment server-side.
       // This avoids exposing Flutterwave secret keys to the client and prevents RLS issues.
@@ -39,7 +53,7 @@ class FlutterwaveService {
           'email': email,
           'name': name,
           'phone_number': phoneNumber ?? '',
-          // Omitting 'payment_options' enables all payment methods available in Flutterwave
+          'payment_options': paymentOptions,
           'meta': meta ?? {},
         },
       );

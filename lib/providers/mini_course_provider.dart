@@ -7,7 +7,6 @@ import '../services/local_course_cache.dart';
 import '../services/supabase_service.dart';
 import 'package:intl/intl.dart';
 import '../services/challenge_evaluator.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../services/global_daily_courses_service.dart';
 import '../services/community_course_service.dart';
 
@@ -27,6 +26,7 @@ class MiniCourseProvider extends ChangeNotifier {
   // Daily course state for global courses
   DailyCourseState _dailyState = DailyCourseState.initial;
   String? _lastError; // Store last error message for debugging
+  bool _isMaintenance = false; // true when AI generation has explicitly failed
 
   List<MiniCourseModel> get courses => _courses;
   MiniCourseModel? get currentCourse => _currentCourse;
@@ -36,6 +36,7 @@ class MiniCourseProvider extends ChangeNotifier {
   List<MiniCourseModel> get todayCourses => _todayCourses;
   List<CommunityMiniCourse> get communityCourses => _communityCourses;
   String? get lastError => _lastError;
+  bool get isMaintenance => _isMaintenance;
 
   // Get a course by its ID (searches both today's courses and regular courses)
   MiniCourseModel? getCourseById(String courseId) {
@@ -56,35 +57,29 @@ class MiniCourseProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> _initAttemptedQuizzes() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final list = prefs.getStringList('attempted_quizzes') ?? [];
-      _attemptedQuizCourseIds = list.toSet();
-    } catch (_) {}
+  void _syncAttemptedQuizzesFromTodayCourses() {
+    final todayIds = _todayCourses.map((c) => c.id).toSet();
+    _attemptedQuizCourseIds.removeWhere(todayIds.contains);
+    for (final course in _todayCourses) {
+      if (course.quiz.isCompleted) {
+        _attemptedQuizCourseIds.add(course.id);
+      }
+    }
   }
 
   bool hasAttemptedQuiz(String courseId) {
     return _attemptedQuizCourseIds.contains(courseId);
   }
 
-  Future<void> _persistAttemptedQuizzes() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setStringList(
-          'attempted_quizzes', _attemptedQuizCourseIds.toList());
-    } catch (_) {}
-  }
-
   void markQuizAttempted(String courseId) {
     if (_attemptedQuizCourseIds.add(courseId)) {
-      _persistAttemptedQuizzes();
       notifyListeners();
     }
   }
 
   // ================= Global Daily Courses (shared trio) =================
   /// Load today's 3 global mini-courses (shared across all users).
+  /// Always prefers live server data so quiz answer indices stay accurate.
   Future<void> loadTodayCourses() async {
     // Prevent concurrent loads
     if (_dailyState == DailyCourseState.generating ||
@@ -94,76 +89,83 @@ class MiniCourseProvider extends ChangeNotifier {
 
     final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
     try {
-      _dailyState = DailyCourseState.checkingCache;
-      notifyListeners();
-
-      final cached = await _cache.getDailyCourses(today);
-      if (cached != null && cached.length == 3) {
-        _todayCourses = cached;
-        _dailyState = DailyCourseState.offlineCached;
-        notifyListeners();
-        // Soft-verify with server in background
-        _verifyAndUpdateFromServer(today);
-        return;
-      }
-
       _dailyState = DailyCourseState.fetchingServer;
       notifyListeners();
 
-      // If authenticated, hydrate completion state from server so users can't
-      // re-take and re-claim rewards after logout/login.
       final supabase = SupabaseService();
       final uid = supabase.currentUser?.id;
       if (supabase.isAuthenticated && uid != null) {
         _todayCourses = await _globalService.getTodayCoursesForUser(userId: uid);
+        _syncAttemptedQuizzesFromTodayCourses();
       } else {
         _todayCourses = await _globalService.getTodayCourses();
       }
       await _cache.saveDailyCourses(today, _todayCourses);
       _dailyState = DailyCourseState.ready;
-      _lastError = null; // Clear error on success
+      _lastError = null;
       notifyListeners();
     } catch (e) {
+      debugPrint('[MiniCourse] Server load failed, trying cache: $e');
+
+      try {
+        _dailyState = DailyCourseState.checkingCache;
+        notifyListeners();
+        final cached = await _cache.getDailyCourses(today);
+        if (cached != null && cached.length == 3) {
+          _todayCourses = cached;
+          try {
+            final cacheSupabase = SupabaseService();
+            final cacheUid = cacheSupabase.currentUser?.id;
+            if (cacheSupabase.isAuthenticated && cacheUid != null) {
+              _todayCourses = await _globalService.hydrateCourseCompletion(
+                courses: _todayCourses,
+                userId: cacheUid,
+              );
+            }
+          } catch (hydrateErr) {
+            debugPrint('[MiniCourse] Cache hydrate failed: $hydrateErr');
+          }
+          _syncAttemptedQuizzesFromTodayCourses();
+          _dailyState = DailyCourseState.offlineCached;
+          _lastError = null;
+          _isMaintenance = false;
+          notifyListeners();
+          return;
+        }
+      } catch (cacheErr) {
+        debugPrint('[MiniCourse] Cache fallback failed: $cacheErr');
+      }
+
       debugPrint('[MiniCourse] ❌ Error loading global daily courses: $e');
 
       // Determine error type for better user feedback
       String errorMessage;
-      if (e.toString().contains('SocketException') ||
-          e.toString().contains('NetworkException') ||
-          e.toString().contains('Failed host lookup')) {
+      final eStr = e.toString();
+      if (eStr.contains('MAINTENANCE:')) {
+        errorMessage = eStr.replaceFirst('Exception: MAINTENANCE:', '').trim();
+        _isMaintenance = true;
+      } else if (eStr.contains('SocketException') ||
+          eStr.contains('NetworkException') ||
+          eStr.contains('Failed host lookup')) {
         errorMessage =
             'No internet connection. Please check your network and try again.';
-      } else if (e.toString().contains('TimeoutException')) {
+        _isMaintenance = false;
+      } else if (eStr.contains('TimeoutException')) {
         errorMessage =
             'Connection timeout. Please check your internet and try again.';
-      } else if (e.toString().contains('not available')) {
+        _isMaintenance = false;
+      } else if (eStr.contains('not available')) {
         errorMessage =
             'Courses are being generated. Please try again in a moment.';
+        _isMaintenance = false;
       } else {
         errorMessage = 'Failed to load courses. Please try again.';
+        _isMaintenance = false;
       }
 
       _lastError = errorMessage;
       _dailyState = DailyCourseState.error;
       notifyListeners();
-    }
-  }
-
-  Future<void> _verifyAndUpdateFromServer(String dateKey) async {
-    try {
-      final supabase = SupabaseService();
-      final uid = supabase.currentUser?.id;
-      final serverCourses = (supabase.isAuthenticated && uid != null)
-          ? await _globalService.getTodayCoursesForUser(userId: uid)
-          : await _globalService.getTodayCourses();
-      if (serverCourses.length == 3) {
-        _todayCourses = serverCourses;
-        await _cache.saveDailyCourses(dateKey, serverCourses);
-        _dailyState = DailyCourseState.ready;
-        notifyListeners();
-      }
-    } catch (_) {
-      // keep cached
     }
   }
 
@@ -213,14 +215,16 @@ class MiniCourseProvider extends ChangeNotifier {
         score: score,
       );
 
-      // Update local state
-      final index = _communityCourses.indexWhere((c) => c.id == course.id);
-      if (index != -1) {
-        _communityCourses[index] = _communityCourses[index].copyWith(
-          isCompleted: true,
-          score: score,
-        );
-        notifyListeners();
+      // Update local state only after a real pass.
+      if (score >= 70 || result['already_completed'] == true) {
+        final index = _communityCourses.indexWhere((c) => c.id == course.id);
+        if (index != -1) {
+          _communityCourses[index] = _communityCourses[index].copyWith(
+            isCompleted: true,
+            score: score,
+          );
+          notifyListeners();
+        }
       }
 
       return {
@@ -239,6 +243,7 @@ class MiniCourseProvider extends ChangeNotifier {
     required MiniCourseModel course,
     required String userId,
     required int courseIndex,
+    String? courseDate,
     BuildContext? uiContext, // optional for snackbar on error
     int? overrideScore, // if provided, use this percent score from UI
   }) async {
@@ -250,52 +255,83 @@ class MiniCourseProvider extends ChangeNotifier {
     final score = overrideScore ??
         ((correct / (questions.isEmpty ? 1 : questions.length)) * 100).round();
 
-    _markQuizCompletedLocally(course.id, score);
-    markQuizAttempted(course.id);
-
     Map<String, dynamic> result = {
       'score': score,
       'rewards_granted': false,
       'coins_awarded': 0,
       'xp_awarded': 0,
+      'already_attempted': false,
+      'already_completed': false,
     };
 
-    if (score >= 70) {
-      try {
-        final dateStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
-        // Use secure server-side completion that handles rewards atomically
-        final serverResult = await _globalService.markCompletedSecure(
-          userId: userId,
-          courseDate: dateStr,
-          courseIndex: courseIndex,
-          score: score,
-        );
-        
-        // Extract reward info from server response
-        result['rewards_granted'] = serverResult['rewards_granted'] ?? false;
-        result['coins_awarded'] = serverResult['coins_awarded'] ?? 0;
-        result['xp_awarded'] = serverResult['xp_awarded'] ?? 0;
-        result['new_coin_balance'] = serverResult['new_coin_balance'];
-        result['new_xp'] = serverResult['new_xp'];
-        result['already_completed'] = serverResult['already_completed'] ?? false;
-        
-        debugPrint('[MiniCourse] ✅ Server completion result: $serverResult');
-        
-        await ChallengeEvaluator.instance.evaluateMiniCourseChallenges();
-      } catch (e) {
-        debugPrint('[MiniCourse] ❌ Failed to mark completion: $e');
-        // Optional UX: snackbar
+    try {
+      // Prefer date from course id / caller; fall back to local today
+      final dateStr = courseDate ??
+          DateFormat('yyyy-MM-dd').format(DateTime.now());
+      final serverResult = await _globalService.submitQuizSecure(
+        userId: userId,
+        courseDate: dateStr,
+        courseIndex: courseIndex,
+        score: score,
+      );
+
+      if (serverResult['success'] != true) {
+        debugPrint('[MiniCourse] ❌ Server rejected quiz submit: $serverResult');
         try {
           if (uiContext != null) {
             // ignore: use_build_context_synchronously
             ScaffoldMessenger.of(uiContext).showSnackBar(
               const SnackBar(
-                  content: Text(
-                      'Failed to save mini-course completion. Please retry.')),
+                content: Text(
+                    'Failed to save quiz attempt. Please check your connection and retry.'),
+              ),
             );
           }
         } catch (_) {}
+        return result;
       }
+
+      final recordedScore =
+          (serverResult['score'] as num?)?.toInt() ?? score;
+      final passed = recordedScore >= 70 ||
+          serverResult['already_completed'] == true;
+      debugPrint(
+        '[MiniCourse] quiz submit course=${course.id} index=$courseIndex '
+        'score=$recordedScore passed=$passed reason=${serverResult['reason']}',
+      );
+      if (passed) {
+        markQuizAttempted(course.id);
+        _markQuizCompletedLocally(course.id, recordedScore);
+      }
+
+      result['score'] = recordedScore;
+      result['rewards_granted'] = serverResult['rewards_granted'] ?? false;
+      result['coins_awarded'] = serverResult['coins_awarded'] ?? 0;
+      result['xp_awarded'] = serverResult['xp_awarded'] ?? 0;
+      result['new_coin_balance'] = serverResult['new_coin_balance'];
+      result['new_xp'] = serverResult['new_xp'];
+      result['already_completed'] = serverResult['already_completed'] ?? false;
+      result['already_attempted'] = serverResult['already_attempted'] ?? false;
+      result['reason'] = serverResult['reason'];
+
+      debugPrint('[MiniCourse] ✅ Server quiz submit result: $serverResult');
+
+      if (result['rewards_granted'] == true) {
+        await ChallengeEvaluator.instance.evaluateMiniCourseChallenges();
+      }
+    } catch (e) {
+      debugPrint('[MiniCourse] ❌ Failed to submit quiz: $e');
+      try {
+        if (uiContext != null) {
+          // ignore: use_build_context_synchronously
+          ScaffoldMessenger.of(uiContext).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  'Failed to save mini-course quiz. Please retry.'),
+            ),
+          );
+        }
+      } catch (_) {}
     }
     return result;
   }
@@ -310,7 +346,11 @@ class MiniCourseProvider extends ChangeNotifier {
         isCompleted: true,
         score: score,
       );
-      _todayCourses[todayIndex] = course.copyWith(quiz: updatedQuiz);
+      _todayCourses[todayIndex] = course.copyWith(
+        quiz: updatedQuiz,
+        status: MiniCourseStatus.completed,
+        completedAt: DateTime.now(),
+      );
       notifyListeners();
       debugPrint(
           '[MiniCourse] ✅ Quiz marked as completed locally (today\'s courses)');
@@ -325,7 +365,11 @@ class MiniCourseProvider extends ChangeNotifier {
         isCompleted: true,
         score: score,
       );
-      _courses[courseIndex] = course.copyWith(quiz: updatedQuiz);
+      _courses[courseIndex] = course.copyWith(
+        quiz: updatedQuiz,
+        status: MiniCourseStatus.completed,
+        completedAt: DateTime.now(),
+      );
 
       // Update current course if this is the current course
       if (_currentCourse != null && _currentCourse!.id == courseId) {
@@ -338,27 +382,50 @@ class MiniCourseProvider extends ChangeNotifier {
     }
   }
 
-  // Available topics for randomly generating courses
+  // Combined leadership + health topics (sync with mini_course_topic_pool.json)
   final List<String> _availableTopics = [
-    'Goal Setting',
-    'Leadership Skills',
-    'Teamwork',
+    'Leadership',
+    'Personal Growth',
+    'Confidence',
     'Communication',
-    'Problem Solving',
-    'Time Management',
-    'Public Speaking',
-    'Conflict Resolution',
-    'Critical Thinking',
+    'Motivation',
     'Emotional Intelligence',
-    'Decision Making',
+    'Self-Discipline',
+    'Mindset',
+    'Productivity',
     'Creativity',
+    'Goal Setting',
+    'Decision Making',
+    'Resilience',
+    'Problem Solving',
+    'Influence',
+    'Time Management',
+    'Conflict Resolution',
+    'Teamwork & Collaboration',
+    'Water First',
+    'How Much Water Do I Need?',
+    'Signs You\'re Thirsty',
+    'Water vs Soda and Juice',
+    'Eat the Rainbow',
+    'Protein Power',
+    'Smart Snacks',
+    'Breakfast Wins',
+    'Sugar Check',
+    'Move Every Day',
+    'Posture Power',
+    'Screen Breaks',
+    'Sleep Equals Strength',
+    'Handwashing Like a Pro',
+    'Teeth and Smile Care',
+    'Rest and Reset',
+    'Breathe to Calm',
+    'Gratitude Journal',
+    'Faith and Health',
   ];
 
-  // Initialize with empty courses - use ensureTodayDailyCourse() for daily generation
+  // Initialize with empty courses - use loadTodayCourses() for global daily courses
   MiniCourseProvider() {
-    // Don't generate courses in constructor to save API costs
-    // Courses will be loaded via ensureTodayDailyCourse() when needed
-    _initAttemptedQuizzes();
+    // Courses are loaded via loadTodayCourses() when needed.
   }
 
   // Deprecated methods removed - use loadTodayCourses() for global daily courses
@@ -579,22 +646,17 @@ class MiniCourseProvider extends ChangeNotifier {
     _attemptedQuizCourseIds.clear();
     _dailyState = DailyCourseState.initial;
     _lastError = null;
+    _isMaintenance = false;
     _isRegenerating = false;
     _isInitializingCourses = true;
     notifyListeners();
     debugPrint('🧹 MiniCourseProvider state cleared');
   }
 
-  /// Clear SharedPreferences cache for attempted quizzes
+  /// Clear in-memory attempted quiz state (server remains source of truth).
   Future<void> clearAttemptedQuizzesCache() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove('attempted_quizzes');
-      _attemptedQuizCourseIds.clear();
-      debugPrint('🧹 Attempted quizzes cache cleared');
-    } catch (e) {
-      debugPrint('Error clearing attempted quizzes cache: $e');
-    }
+    _attemptedQuizCourseIds.clear();
+    debugPrint('🧹 Attempted quizzes memory cleared');
   }
 
   // Legacy per-user daily course removed - use loadTodayCourses() for global shared courses

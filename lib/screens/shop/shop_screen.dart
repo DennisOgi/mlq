@@ -96,7 +96,7 @@ class _ShopScreenState extends State<ShopScreen>
           '🔑 Stored in instance: amount=$_pendingAmount, coins=$_pendingCoins, txRef=$_pendingTxRef');
       debugPrint('═══════════════════════════════════════════════════');
 
-      // Create payment attempt record in database
+      // Create payment attempt record — required for verify/webhook fulfill.
       try {
         await SupabaseService().client.rpc('create_payment_attempt', params: {
           'p_user_id': user.id,
@@ -111,7 +111,10 @@ class _ShopScreenState extends State<ShopScreen>
         });
         debugPrint('✅ [Shop] Payment attempt created in database');
       } catch (e) {
-        debugPrint('⚠️ [Shop] Failed to create payment attempt: $e');
+        debugPrint('❌ [Shop] Failed to create payment attempt: $e');
+        throw Exception(
+          'Could not start payment. Please check your connection and try again.',
+        );
       }
 
       // Initialize payment using Flutterwave API (following official docs)
@@ -122,7 +125,7 @@ class _ShopScreenState extends State<ShopScreen>
         amount: amount,
         currency: 'NGN',
         txRef: txRef,
-        redirectUrl: 'https://mlq.app/redirect',
+        redirectUrl: FlutterwaveService.paymentRedirectUrl,
         phoneNumber: '',
         meta: {
           'type': 'coins',
@@ -150,7 +153,7 @@ class _ShopScreenState extends State<ShopScreen>
         MaterialPageRoute(
           builder: (context) => FlutterwaveWebViewPayment(
             paymentUrl: paymentLink,
-            redirectUrl: 'https://mlq.app/redirect',
+            redirectUrl: FlutterwaveService.paymentRedirectUrl,
             onSuccess: (data) {
               Navigator.of(context).pop(data);
             },
@@ -236,12 +239,13 @@ class _ShopScreenState extends State<ShopScreen>
         return;
       }
 
-      // Payment successful - verify with backend
-      final transactionId = paymentResult['transaction_id'] ?? '';
-      if (transactionId.isEmpty) {
+      // Payment successful - verify with backend (tx_ref is enough if id missing)
+      final transactionId = (paymentResult['transaction_id'] ?? '').toString();
+      if (transactionId.isEmpty &&
+          (_pendingTxRef == null || _pendingTxRef!.isEmpty)) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Missing transaction ID'),
+              content: Text('Missing payment reference'),
               backgroundColor: Colors.red),
         );
         setState(() => _processing = false);
@@ -286,19 +290,8 @@ class _ShopScreenState extends State<ShopScreen>
         if (!mounted) return;
         debugPrint('✅ [Shop] Coins credited successfully: +$_pendingCoins');
 
-        // Update payment attempt status to completed
-        try {
-          await SupabaseService()
-              .client
-              .rpc('update_payment_attempt_status', params: {
-            'p_tx_ref': _pendingTxRef,
-            'p_status': 'completed',
-            'p_transaction_id': transactionId,
-            'p_event_data': {'coins_credited': _pendingCoins},
-          });
-        } catch (e) {
-          debugPrint('⚠️ [Shop] Failed to update payment status: $e');
-        }
+        // verify_flutterwave_txn / fulfill already marks the attempt completed.
+        // Do not call update_payment_attempt_status('completed') from the client.
 
         // Refresh user profile from server to reflect new balance
         await Provider.of<UserProvider>(context, listen: false)
@@ -834,7 +827,7 @@ class _ShopScreenState extends State<ShopScreen>
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              '• Setting a goal (0.5 coins)\n• Completing a goal (0.5 coins)\n• Completing challenges',
+                              '• Creating a daily goal (0.5 coins)\n• Completing a daily goal (0.5 coins)\n• Completing challenges\n• Earning badges and rewards',
                               style: AppTextStyles.body,
                             ),
                           ],

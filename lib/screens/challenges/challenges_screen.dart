@@ -6,16 +6,21 @@ import '../../constants/app_constants.dart';
 import '../../models/models.dart';
 import '../../providers/providers.dart';
 import '../../widgets/widgets.dart';
-import '../../widgets/premium_challenge_card.dart';
-import '../../widgets/trial_expired_modal.dart';
-import '../shop/shop_screen.dart';
-import '../../services/subscription_service.dart';
-import '../../services/supabase_service.dart';
+import '../../utils/entitlements.dart';
+import '../../widgets/feature_lock_card.dart';
+import '../lead_market/lead_market_sponsors_screen.dart';
 
 class ChallengesScreen extends StatefulWidget {
   final bool isInHomeScreen;
 
-  const ChallengesScreen({super.key, this.isInHomeScreen = false});
+  /// 0 = Open, 1 = Joined, 2 = Completed
+  final int initialTabIndex;
+
+  const ChallengesScreen({
+    super.key,
+    this.isInHomeScreen = false,
+    this.initialTabIndex = 0,
+  });
 
   @override
   State<ChallengesScreen> createState() => _ChallengesScreenState();
@@ -24,18 +29,22 @@ class ChallengesScreen extends StatefulWidget {
 class _ChallengesScreenState extends State<ChallengesScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  late UserProvider userProvider;
-  late ChallengeProvider challengeProvider;
+
+  static const _tabs = ['Open', 'Joined', 'Completed'];
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
-    userProvider = Provider.of<UserProvider>(context, listen: false);
-    challengeProvider = Provider.of<ChallengeProvider>(context, listen: false);
-    // Refresh challenges when screen initializes
+    _tabController = TabController(
+      length: _tabs.length,
+      vsync: this,
+      initialIndex: widget.initialTabIndex.clamp(0, _tabs.length - 1),
+    )..addListener(() {
+        if (mounted) setState(() {});
+      });
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      challengeProvider.refreshChallenges();
+      Provider.of<ChallengeProvider>(context, listen: false)
+          .refreshChallenges();
     });
   }
 
@@ -45,16 +54,14 @@ class _ChallengesScreenState extends State<ChallengesScreen>
     super.dispose();
   }
 
-  // Feature gate for premium challenges - show upgrade prompt
   void _openChallengeDetail(BuildContext context, ChallengeModel challenge) {
     final challengeProvider =
         Provider.of<ChallengeProvider>(context, listen: false);
     final userProvider = Provider.of<UserProvider>(context, listen: false);
     final isJoined = challengeProvider.isParticipatingIn(challenge.id);
-    final isPremiumUser = userProvider.user?.isPremium == true;
+    final isPremiumUser = userProvider.hasPaidAccess;
 
     if (challenge.isPremium && !isJoined && !isPremiumUser) {
-      // Show upgrade prompt for premium challenges
       _showUpgradeDialog(context, challenge);
     } else {
       Navigator.pushNamed(context, '/challenge-detail',
@@ -85,16 +92,13 @@ class _ChallengesScreenState extends State<ChallengesScreen>
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: AppColors.primary.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
+                color: AppColors.primarySoft,
+                borderRadius: BorderRadius.circular(12),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Premium Benefits:',
-                    style: AppTextStyles.bodyBold,
-                  ),
+                  Text('Premium Benefits:', style: AppTextStyles.bodyBold),
                   const SizedBox(height: 8),
                   Text('• Unlimited premium challenges',
                       style: AppTextStyles.body),
@@ -113,13 +117,12 @@ class _ChallengesScreenState extends State<ChallengesScreen>
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
-              // Navigate to subscription management with proper context
               Navigator.of(context, rootNavigator: true)
                   .pushNamed('/subscription-management');
             },
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
+              backgroundColor: AppColors.secondary,
+              foregroundColor: AppColors.textOnGold,
             ),
             child: const Text('Upgrade Now'),
           ),
@@ -130,43 +133,8 @@ class _ChallengesScreenState extends State<ChallengesScreen>
 
   @override
   Widget build(BuildContext context) {
-    // Create the TabBar widget
-    final tabBar = TabBar(
-      controller: _tabController,
-      isScrollable: true,
-      tabAlignment: TabAlignment.center,
-      indicatorColor: Colors.transparent, // Remove the underline/outline border
-      dividerColor: Colors.transparent, // Remove the bottom divider/border line
-      labelColor: AppColors.secondary, // Active tab gold
-      unselectedLabelColor: const Color.fromARGB(137, 233, 228, 228),
-      labelStyle: AppTextStyles.bodyBold
-          .copyWith(fontSize: 16, fontWeight: FontWeight.w700),
-      unselectedLabelStyle: AppTextStyles.body
-          .copyWith(fontSize: 14, fontWeight: FontWeight.w500),
-      labelPadding: const EdgeInsets.symmetric(horizontal: 16.0),
-      tabs: const [
-        Tab(text: 'Basic'),
-        Tab(text: 'Premium'),
-        Tab(text: 'My Challenges'),
-      ],
-    );
-
-    // Get providers for updating UI
     final challengeProvider = Provider.of<ChallengeProvider>(context);
 
-    // Create the content widget
-    final content = challengeProvider.isLoading
-        ? const Center(child: CircularProgressIndicator())
-        : TabBarView(
-            controller: _tabController,
-            children: [
-              _buildBasicChallenges(),
-              _buildPremiumChallenges(),
-              _buildMyChallenges(),
-            ],
-          );
-
-    // Show error snackbar if there is an error
     if (challengeProvider.hasError) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -175,429 +143,507 @@ class _ChallengesScreenState extends State<ChallengesScreen>
       });
     }
 
-    // If this screen is displayed within the HomeScreen, return a column with TabBar and content
-    if (widget.isInHomeScreen) {
-      return Column(
-        children: [
-          Container(
-            color: AppColors.primary,
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.emoji_events_rounded,
-                              size: 28, color: AppColors.secondary),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Challenges',
-                            style: AppTextStyles.heading3
-                                .copyWith(color: Colors.white),
-                          ),
-                        ],
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.shopping_bag,
-                            color: AppColors.secondary),
-                        onPressed: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) => const ShopScreen(),
-                            ),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12.0, vertical: 6.0),
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: AppColors.primary,
-                      borderRadius: BorderRadius.circular(24),
-                    ),
-                    child: Center(child: tabBar),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(child: content),
-        ],
-      );
-    }
+    final joinedCount = challengeProvider.participatingChallenges
+        .where((c) => !challengeProvider.isCompleted(c.id))
+        .length;
 
-    // Return the full Scaffold when shown as a standalone screen
-    return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            const Icon(Icons.emoji_events_rounded,
-                size: 28, color: AppColors.secondary),
-            const SizedBox(width: 8),
-            Text(
-              'Challenges',
-              style: AppTextStyles.heading3.copyWith(color: Colors.white),
-            ),
-          ],
-        ),
-        backgroundColor: AppColors.primary,
-        elevation: 0,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.shopping_bag, color: AppColors.secondary),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => const ShopScreen(),
-                ),
-              );
-            },
-          ),
-        ],
-        bottom: PreferredSize(
-          preferredSize: tabBar.preferredSize,
-          child: Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: AppColors.primary,
-                borderRadius: BorderRadius.circular(24),
-              ),
-              child: Center(child: tabBar),
+    final header = MlqHeroHeader(
+      title: 'Quest',
+      highlight: 'Challenges',
+      subtitle: joinedCount > 0
+          ? '$joinedCount in progress · build habits, earn coins and badges'
+          : 'Build habits, earn coins and badges',
+      showBack: !widget.isInHomeScreen && Navigator.of(context).canPop(),
+      artAsset: null,
+      action: Material(
+        color: Colors.white.withOpacity(0.12),
+        shape: const CircleBorder(),
+        child: IconButton(
+          tooltip: 'Lead Market',
+          icon: const Icon(Icons.shopping_bag_rounded,
+              color: AppColors.secondary),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => const LeadMarketSponsorsScreen(),
             ),
           ),
         ),
       ),
-      body: content,
+      bottom: MlqSegmentTabs(
+        labels: _tabs,
+        selected: _tabController.index,
+        onDark: true,
+        onChanged: (i) => _tabController.animateTo(i),
+      ),
     );
-  }
 
-  Widget _buildBasicChallenges() {
-    final challengeProvider = Provider.of<ChallengeProvider>(context);
-    // Only show active (non-expired) basic challenges that user hasn't joined
-    final basicChallenges = challengeProvider.activeBasicChallenges
-        .where((c) => !challengeProvider.isParticipatingIn(c.id))
-        .toList();
-
-    return _buildChallengesList(
-      challenges: basicChallenges,
-      emptyMessage: 'No basic challenges available',
-      emptyDescription: 'Check back later for new challenges!',
-    );
-  }
-
-  Widget _buildPremiumChallenges() {
-    final challengeProvider = Provider.of<ChallengeProvider>(context);
-    // Only show active (non-expired) premium challenges that user hasn't joined
-    final premium = challengeProvider.activePremiumChallenges
-        .where((c) => !challengeProvider.isParticipatingIn(c.id))
-        .toList();
-
-    if (premium.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+    final body = challengeProvider.isLoading
+        ? const MlqLoadingState(message: 'Loading challenges...')
+        : TabBarView(
+            controller: _tabController,
             children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: const Icon(Icons.workspace_premium,
-                    size: 64, color: AppColors.secondary),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Premium Challenges — Coming Soon',
-                style: AppTextStyles.heading3,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'We\'re curating exciting, prize-backed premium challenges with partners. Check back soon!',
-                style: AppTextStyles.body,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Tip: Join a school or upgrade to be first in line when new premium challenges drop.',
-                style: AppTextStyles.caption
-                    .copyWith(color: AppColors.textSecondary),
-                textAlign: TextAlign.center,
-              ),
+              _buildOpen(challengeProvider),
+              _buildJoined(challengeProvider),
+              _buildCompleted(challengeProvider),
             ],
-          ),
+          );
+
+    final content = Column(
+      children: [
+        header,
+        Expanded(child: body),
+      ],
+    );
+
+    if (widget.isInHomeScreen) return content;
+    return Scaffold(body: content);
+  }
+
+  Widget _buildOpen(ChallengeProvider provider) {
+    final user = Provider.of<UserProvider>(context).user;
+    if (!Entitlements.hasPaidAccess(user)) {
+      return const SingleChildScrollView(
+        padding: EdgeInsets.all(24),
+        child: FeatureLockCard(
+          title: 'Challenges',
+          description:
+              'Join challenges with a paid plan. Goals and Gratitude Jar stay free.',
+          icon: Icons.emoji_events_rounded,
         ),
       );
     }
 
-    return ListView.builder(
-      itemCount: premium.length,
-      itemBuilder: (context, index) {
-        final challenge = premium[index];
-        return PremiumChallengeCard(
-          challenge: challenge,
-          isUnlocked: false,
-          showSponsorRegistration: false,
-          onTap: () => _openChallengeDetail(context, challenge),
-        ).animate().fadeIn(
-            duration: Duration(milliseconds: 300),
-            delay: Duration(milliseconds: 50 * index));
-      },
+    final open = [
+      ...provider.activePremiumChallenges,
+      ...provider.activeBasicChallenges,
+    ].where((c) => !provider.isParticipatingIn(c.id)).toList();
+
+    return _buildList(
+      provider,
+      open,
+      featureFirst: true,
+      emptyTitle: 'No open challenges',
+      emptyMessage: "You've joined them all. New challenges drop regularly!",
     );
   }
 
-  Widget _buildMyChallenges() {
-    final challengeProvider = Provider.of<ChallengeProvider>(context);
-    final participatingChallenges = challengeProvider.participatingChallenges;
-
-    return _buildChallengesList(
-      challenges: participatingChallenges,
-      emptyMessage: 'You haven\'t joined any challenges',
-      emptyDescription: 'Join challenges to earn coins and rewards!',
-      isParticipating: true,
+  Widget _buildJoined(ChallengeProvider provider) {
+    final joined = provider.participatingChallenges
+        .where((c) => !provider.isCompleted(c.id))
+        .toList()
+      ..sort((a, b) => a.endDate.compareTo(b.endDate));
+    return _buildList(
+      provider,
+      joined,
+      emptyTitle: "You haven't joined any challenges",
+      emptyMessage: 'Pick one from Open to start earning coins and badges.',
+      emptyAction: 'Browse open',
+      onEmptyAction: () => _tabController.animateTo(0),
     );
   }
 
-  Widget _buildChallengesList({
-    required List<ChallengeModel> challenges,
+  Widget _buildCompleted(ChallengeProvider provider) {
+    final done = provider.participatingChallenges
+        .where((c) => provider.isCompleted(c.id))
+        .toList();
+    return _buildList(
+      provider,
+      done,
+      emptyTitle: 'No completed challenges yet',
+      emptyMessage: 'Finish a challenge to see it here with your badge.',
+    );
+  }
+
+  Widget _buildList(
+    ChallengeProvider provider,
+    List<ChallengeModel> items, {
+    bool featureFirst = false,
+    required String emptyTitle,
     required String emptyMessage,
-    required String emptyDescription,
-    bool isPremium = false,
-    bool isParticipating = false,
+    String? emptyAction,
+    VoidCallback? onEmptyAction,
   }) {
-    final challengeProvider = Provider.of<ChallengeProvider>(context);
-
-    if (challenges.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                isPremium ? Icons.star : Icons.emoji_events,
-                size: 64,
-                color: isPremium ? AppColors.accent1 : AppColors.secondary,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                emptyMessage,
-                style: AppTextStyles.heading3,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                emptyDescription,
-                style: AppTextStyles.body,
-                textAlign: TextAlign.center,
-              ),
-            ],
+    final Widget child;
+    if (items.isEmpty) {
+      child = ListView(
+        children: [
+          const SizedBox(height: 24),
+          MlqEmptyState(
+            title: emptyTitle,
+            message: emptyMessage,
+            icon: Icons.emoji_events_rounded,
+            actionLabel: emptyAction,
+            onAction: onEmptyAction,
           ),
-        ),
+        ],
       );
-    }
-
-    // Desktop optimization: Use grid layout for wider screens
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isDesktop = constraints.maxWidth > 800;
-        
-        if (isDesktop) {
-          // Grid layout for desktop
-          return GridView.builder(
-            padding: const EdgeInsets.all(24),
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: constraints.maxWidth > 1200 ? 3 : 2,
-              crossAxisSpacing: 20,
-              mainAxisSpacing: 20,
-              childAspectRatio: 1.1,
-            ),
-            itemCount: challenges.length,
+    } else {
+      child = LayoutBuilder(
+        builder: (context, constraints) {
+          final maxWidth = constraints.maxWidth > 800 ? 880.0 : double.infinity;
+          return ListView.builder(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+            itemCount: items.length,
             itemBuilder: (context, index) {
-              final challenge = challenges[index];
-              final isParticipatingInThisChallenge =
-                  challengeProvider.isParticipatingIn(challenge.id);
-
-              if (isParticipatingInThisChallenge && challenge.isPremium) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(
-                      child: PremiumChallengeCard(
-                        challenge: challenge,
-                        isUnlocked: true,
-                        showSponsorRegistration: false,
-                        onTap: () => _openChallengeDetail(context, challenge),
-                      ),
-                    ),
-                    if (challengeProvider.isCompleted(challenge.id))
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8.0),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: AppColors.success.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(
-                                color: AppColors.success.withValues(alpha: 0.4)),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.check_circle,
-                                  size: 16, color: AppColors.success),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Completed',
-                                style: AppTextStyles.caption.copyWith(
-                                  color: AppColors.success,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                  ],
-                ).animate().fadeIn(
-                    duration: const Duration(milliseconds: 300),
-                    delay: Duration(milliseconds: 50 * index));
-              }
-
-              return ChallengeCard(
-                challenge: challenge,
-                isParticipating: isParticipatingInThisChallenge,
-                onTap: () => _openChallengeDetail(context, challenge),
+              final c = items[index];
+              final state = provider.isCompleted(c.id)
+                  ? _ChallengeState.completed
+                  : provider.isParticipatingIn(c.id)
+                      ? _ChallengeState.joined
+                      : _ChallengeState.open;
+              final Widget card = featureFirst && index == 0
+                  ? _FeaturedChallengeCard(
+                      challenge: c,
+                      onTap: () => _openChallengeDetail(context, c),
+                    )
+                  : _ChallengeRow(
+                      challenge: c,
+                      state: state,
+                      onTap: () => _openChallengeDetail(context, c),
+                    );
+              return Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: maxWidth),
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: card,
+                  ),
+                ),
               ).animate().fadeIn(
-                  duration: const Duration(milliseconds: 300),
-                  delay: Duration(milliseconds: 50 * index));
+                    duration: 300.ms,
+                    delay: (40 * index.clamp(0, 8)).ms,
+                  );
             },
           );
-        }
+        },
+      );
+    }
 
-        // Mobile: List layout
-        return ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: challenges.length,
-          itemBuilder: (context, index) {
-            final challenge = challenges[index];
-            final isParticipatingInThisChallenge =
-                challengeProvider.isParticipatingIn(challenge.id);
-
-            // For joined premium challenges, show richer premium layout with actions
-            if (isParticipatingInThisChallenge && challenge.isPremium) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  PremiumChallengeCard(
-                    challenge: challenge,
-                    isUnlocked: true,
-                    showSponsorRegistration: false,
-                    onTap: () => _openChallengeDetail(context, challenge),
-                  ),
-                  if (challengeProvider.isCompleted(challenge.id))
-                    Padding(
-                      padding: const EdgeInsets.only(
-                          top: 8.0, left: 16.0, right: 16.0),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: AppColors.success.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(
-                                color: AppColors.success.withValues(alpha: 0.4)),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.check_circle,
-                                  size: 16, color: AppColors.success),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Completed',
-                                style: AppTextStyles.caption.copyWith(
-                                  color: AppColors.success,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  const SizedBox(height: 8),
-                  // View details button
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                    child: QuestButton(
-                      text: 'View Details',
-                      type: QuestButtonType.primary,
-                      isFullWidth: true,
-                      onPressed: () => _openChallengeDetail(context, challenge),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  // Leave challenge button
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                    child: QuestButton(
-                      text: 'Leave Challenge',
-                      type: QuestButtonType.outline,
-                      isFullWidth: true,
-                      onPressed: () async {
-                        challengeProvider.leaveChallenge(challenge.id);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'You left the ${challenge.title} challenge',
-                              style: AppTextStyles.body
-                                  .copyWith(color: Colors.white),
-                            ),
-                            backgroundColor: AppColors.secondary,
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-              ).animate().fadeIn(
-                  duration: const Duration(milliseconds: 300),
-                  delay: Duration(milliseconds: 50 * index));
-            }
-
-            // Default card for others (basic or not joined)
-            return ChallengeCard(
-              challenge: challenge,
-              isParticipating: isParticipatingInThisChallenge,
-              onTap: () => _openChallengeDetail(context, challenge),
-            ).animate().fadeIn(
-                duration: const Duration(milliseconds: 300),
-                delay: Duration(milliseconds: 50 * index));
-          },
-        );
-      },
+    return RefreshIndicator(
+      color: AppColors.primary,
+      onRefresh: () => provider.refreshChallenges(),
+      child: child,
     );
   }
+}
 
-  // Old purchase dialog removed in favor of detail-screen unlock flow.
+enum _ChallengeState { open, joined, completed }
+
+const _badgeDir = 'assets/images/badges';
+
+/// Existing badge art that matches a challenge's habit theme.
+String _challengeArt(String title) {
+  final t = title.toLowerCase();
+  bool has(String s) => t.contains(s);
+
+  if (has('gratitude') || has('thank')) {
+    if (has('flame') || has('streak')) return '$_badgeDir/flame_of_gratitude.png';
+    if (has('centurion') || has('devotee') || has('master') || has('marathon')) {
+      return '$_badgeDir/eternal_gratitude.png';
+    }
+    if (has('starter') || has('novice')) return '$_badgeDir/seed_of_thanks.png';
+    return '$_badgeDir/tree_of_thanks.png';
+  }
+  if (has('vision')) {
+    return has('legend')
+        ? '$_badgeDir/legacy_builder.png'
+        : '$_badgeDir/master_planner.png';
+  }
+  if (has('course') || has('learn') || has('knowledge') || has('wisdom')) {
+    if (has('connoisseur')) return '$_badgeDir/sage_of_learning.png';
+    if (has('collector')) return '$_badgeDir/scholars_cap.png';
+    if (has('explorer')) return '$_badgeDir/curious_mind.png';
+    return '$_badgeDir/knowledge_Seeker.png';
+  }
+  if (has('streak')) return '$_badgeDir/step_climber.png';
+  if (has('daily goal')) return '$_badgeDir/sharp_shooter.png';
+  if (has('main goal') || has('milestone')) return '$_badgeDir/goal_voyager.png';
+  if (has('well-rounded') || has('achiev')) return '$_badgeDir/achievers_medal.png';
+  if (has('goal') || has('dream')) return '$_badgeDir/peak_reacher.png';
+  if (has('exam') || has('waec') || has('jamb') || has('excellen')) {
+    return '$_badgeDir/scholars_cap.png';
+  }
+  return '$_badgeDir/super_power.png';
+}
+
+({String text, Color color}) _deadline(ChallengeModel c) {
+  final left = c.endDate.difference(DateTime.now());
+  if (left.isNegative) return (text: 'Ended', color: AppColors.textSecondary);
+  if (left.inHours < 24) {
+    return (text: 'Ends in ${left.inHours}h', color: AppColors.error);
+  }
+  final days = left.inDays;
+  return (
+    text: days == 1 ? '1 day left' : '$days days left',
+    color: AppColors.textSecondary,
+  );
+}
+
+class _ArtTile extends StatelessWidget {
+  final String asset;
+  final double padding;
+
+  const _ArtTile({required this.asset, this.padding = 14});
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [AppColors.plum, AppColors.primary],
+        ),
+      ),
+      child: Padding(
+        padding: EdgeInsets.all(padding),
+        child: Image.asset(
+          asset,
+          fit: BoxFit.contain,
+          errorBuilder: (_, __, ___) => const Icon(
+            Icons.emoji_events_rounded,
+            color: AppColors.secondary,
+            size: 36,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RewardPills extends StatelessWidget {
+  final ChallengeModel challenge;
+
+  const _RewardPills({required this.challenge});
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: [
+        if (challenge.xpReward > 0)
+          MlqPill(label: '+${challenge.xpReward} XP', icon: Icons.bolt_rounded),
+        if (challenge.coinReward > 0)
+          MlqPill(
+            label: '+${challenge.coinReward} coins',
+            icon: Icons.monetization_on_rounded,
+            background: AppColors.secondary.withOpacity(0.3),
+            foreground: AppColors.goldText,
+          ),
+        if (challenge.isPremium)
+          const MlqPill.gold(
+              label: 'Premium', icon: Icons.workspace_premium_rounded),
+      ],
+    );
+  }
+}
+
+BoxDecoration _cardDecoration({bool premium = false}) => BoxDecoration(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(AppSizes.radiusL),
+      border: Border.all(
+        color: premium ? AppColors.secondary : AppColors.border,
+        width: premium ? 1.4 : 1,
+      ),
+      boxShadow: [
+        BoxShadow(
+          color: AppColors.plum.withOpacity(0.06),
+          blurRadius: 14,
+          offset: const Offset(0, 5),
+        ),
+      ],
+    );
+
+class _FeaturedChallengeCard extends StatelessWidget {
+  final ChallengeModel challenge;
+  final VoidCallback onTap;
+
+  const _FeaturedChallengeCard({required this.challenge, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final deadline = _deadline(challenge);
+    final sponsor = challenge.isPremium &&
+            challenge.organizationName.trim().isNotEmpty
+        ? challenge.organizationName
+        : null;
+
+    return Container(
+      decoration: _cardDecoration(premium: challenge.isPremium),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              AspectRatio(
+                aspectRatio: 16 / 10,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    _ArtTile(asset: _challengeArt(challenge.title), padding: 28),
+                    const Positioned(
+                      left: 12,
+                      top: 12,
+                      child: MlqPill.gold(
+                          label: 'Featured', icon: Icons.star_rounded),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      challenge.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTextStyles.heading3.copyWith(height: 1.2),
+                    ),
+                    if (sponsor != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        'Sponsored by $sponsor',
+                        style: AppTextStyles.caption
+                            .copyWith(color: AppColors.goldText),
+                      ),
+                    ],
+                    const SizedBox(height: 6),
+                    Text(
+                      challenge.description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTextStyles.bodySmall
+                          .copyWith(color: AppColors.textSecondary),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(child: _RewardPills(challenge: challenge)),
+                        const SizedBox(width: 8),
+                        Text(
+                          deadline.text,
+                          style: AppTextStyles.caption.copyWith(
+                            color: deadline.color,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    QuestButton(
+                      text: 'View challenge',
+                      type: QuestButtonType.secondary,
+                      height: 44,
+                      isFullWidth: true,
+                      onPressed: onTap,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChallengeRow extends StatelessWidget {
+  final ChallengeModel challenge;
+  final _ChallengeState state;
+  final VoidCallback onTap;
+
+  const _ChallengeRow({
+    required this.challenge,
+    required this.state,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final deadline = _deadline(challenge);
+    final done = state == _ChallengeState.completed;
+
+    return Container(
+      decoration: _cardDecoration(premium: challenge.isPremium),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: SizedBox(
+                    width: 88,
+                    height: 88,
+                    child: _ArtTile(asset: _challengeArt(challenge.title)),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        challenge.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyles.bodyBold.copyWith(height: 1.2),
+                      ),
+                      const SizedBox(height: 6),
+                      _RewardPills(challenge: challenge),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Icon(
+                            done
+                                ? Icons.check_circle_rounded
+                                : state == _ChallengeState.joined
+                                    ? Icons.directions_run_rounded
+                                    : Icons.schedule_rounded,
+                            size: 14,
+                            color: done ? AppColors.success : deadline.color,
+                          ),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              done
+                                  ? 'Completed'
+                                  : state == _ChallengeState.joined
+                                      ? 'Joined · ${deadline.text}'
+                                      : deadline.text,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTextStyles.caption.copyWith(
+                                color:
+                                    done ? AppColors.success : deadline.color,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 4),
+                const Icon(Icons.chevron_right_rounded,
+                    color: AppColors.primary),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

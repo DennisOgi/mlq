@@ -17,3 +17,6 @@ export 'skill_tree_model.dart';
 export 'avatar_item_model.dart';
 export 'wallet_transaction_model.dart';
 export 'savings_goal_model.dart';
+export 'library_video_model.dart';
+export 'school_library_item.dart';
+export 'yt_library_models.dart';

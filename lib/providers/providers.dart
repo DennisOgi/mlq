@@ -10,3 +10,6 @@ export 'notification_provider.dart';
 export 'organization_settings_provider.dart';
 
 export 'community_provider.dart';
+export 'library_provider.dart';
+export 'school_library_provider.dart';
+export 'school_course_provider.dart';

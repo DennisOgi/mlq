@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_text_styles.dart';
+import '../theme/app_theme.dart';
 import 'notification_badge.dart';
 
 class EnhancedAppBar extends StatelessWidget implements PreferredSizeWidget {
@@ -47,11 +48,12 @@ class EnhancedAppBar extends StatelessWidget implements PreferredSizeWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: backgroundColor != null
-              // Use solid color when explicitly provided
               ? [backgroundColor!, backgroundColor!]
-              // Default to premium purple -> gold gradient
               : [AppColors.primary, AppColors.secondary],
         ),
+        borderRadius: AppTheme.isDesktop(context)
+            ? BorderRadius.zero
+            : const BorderRadius.vertical(bottom: Radius.circular(16)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.2),
@@ -66,7 +68,6 @@ class EnhancedAppBar extends StatelessWidget implements PreferredSizeWidget {
           backgroundColor: Colors.transparent,
           elevation: 0,
           centerTitle: centerTitle,
-          // Set default icon colors to gold for premium look
           iconTheme: const IconThemeData(color: AppColors.secondary),
           actionsIconTheme: const IconThemeData(color: AppColors.secondary),
           automaticallyImplyLeading: showBackButton,
@@ -89,11 +90,7 @@ class EnhancedAppBar extends StatelessWidget implements PreferredSizeWidget {
             ),
           ),
           actions: appBarActions,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(
-              bottom: Radius.circular(16),
-            ),
-          ),
+          shape: AppTheme.appBarShape(context),
         ),
       ),
     );

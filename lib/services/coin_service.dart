@@ -28,25 +28,32 @@ class CoinService {
     }
   }
 
-  // Add coins to user's balance
+  // Positive awards are server-only. Negative amounts use spend_coins.
   Future<bool> addCoins({
-    required String userId, 
-    required num amount, 
+    required String userId,
+    required num amount,
     required String description,
     required String transactionType,
     String? referenceType,
     String? referenceId,
   }) async {
     try {
-      // Start a transaction
-      return await _client.rpc('add_coins', params: {
-        'p_user_id': userId,
-        'p_amount': amount,
-        'p_description': description,
-        'p_transaction_type': transactionType,
-        'p_reference_type': referenceType,
-        'p_reference_id': referenceId,
-      });
+      if (amount > 0) {
+        debugPrint(
+          '⚠️ CoinService.addCoins award blocked ($amount). Server-only.',
+        );
+        return false;
+      }
+      if (amount < 0) {
+        final result = await _client.rpc('spend_coins', params: {
+          'p_amount': amount.abs(),
+          'p_description': description,
+          'p_reference_type': referenceType ?? transactionType,
+          'p_reference_id': referenceId,
+        });
+        return result is Map && result['success'] == true;
+      }
+      return true;
     } catch (e) {
       debugPrint('Error adding coins: $e');
       return false;
@@ -78,32 +85,17 @@ class CoinService {
     }
   }
 
-  // Award coins for goal-related activities (as per user requirements)
+  // Goal coin awards are server-only (complete_goal_secure). Client calls no-op.
   Future<bool> awardGoalCoins({
-    required String userId, 
-    required String goalId, 
+    required String userId,
+    required String goalId,
     required bool isCompletion,
   }) async {
-    try {
-      // Award 0.5 coins for setting a goal and 0.5 for completing
-      final coinAmount = 0.5;
-      final transactionType = isCompletion ? 'goal_completion' : 'goal_creation';
-      final description = isCompletion
-          ? 'Completed daily goal'
-          : 'Created daily goal';
-
-      return await addCoins(
-        userId: userId,
-        amount: coinAmount,
-        description: description,
-        transactionType: transactionType,
-        referenceType: 'goal',
-        referenceId: goalId,
-      );
-    } catch (e) {
-      debugPrint('Error awarding goal coins: $e');
-      return false;
-    }
+    debugPrint(
+      '⚠️ awardGoalCoins ignored (goalId=$goalId, completion=$isCompletion). '
+      'Awards are server-side only.',
+    );
+    return false;
   }
 
   // Award coins for completing challenges

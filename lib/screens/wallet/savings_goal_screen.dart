@@ -104,7 +104,7 @@ class _SavingsGoalScreenState extends State<SavingsGoalScreen>
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
-                    colors: [Color(0xFF9D0389), Color(0xFF6B1D7B)],
+                    colors: [Color(0xFF5A0050), Color(0xFF9D0389)],
                   ),
                   borderRadius: BorderRadius.circular(20),
                   boxShadow: [
@@ -244,7 +244,7 @@ class _SavingsGoalScreenState extends State<SavingsGoalScreen>
                 padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
-                    colors: [Color(0xFF9D0389), Color(0xFF6B1D7B)],
+                    colors: [Color(0xFF5A0050), Color(0xFF9D0389)],
                   ),
                   borderRadius: BorderRadius.circular(30),
                   boxShadow: [
@@ -667,7 +667,7 @@ class _SavingsGoalScreenState extends State<SavingsGoalScreen>
                     child: Ink(
                       decoration: BoxDecoration(
                         gradient: const LinearGradient(
-                          colors: [Color(0xFF9D0389), Color(0xFF6B1D7B)],
+                          colors: [Color(0xFF5A0050), Color(0xFF9D0389)],
                         ),
                         borderRadius: BorderRadius.circular(16),
                       ),

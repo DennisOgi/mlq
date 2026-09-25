@@ -80,17 +80,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _processingPayment = false;
   bool _agreedToTerms = false;
 
-  // Pricing and coin information
+  // Pricing and coin information (kept for legacy payment UI; active onboarding skips subscription)
   final Map<String, Map<String, Map<String, dynamic>>> _tierInfo = {
-    'Basic': {
+    'Monthly': {
       'Monthly': {'price': '₦2,500', 'coins': 1000},
-      'Quarterly': {'price': '₦7,000', 'coins': 3000},
-      'Yearly': {'price': '₦25,000', 'coins': 12000},
     },
-    'Premium': {
-      'Monthly': {'price': '₦5,000', 'coins': 2100},
-      'Quarterly': {'price': '₦14,000', 'coins': 6300},
-      'Yearly': {'price': '₦50,000', 'coins': 25200},
+    'Quarterly': {
+      'Quarterly': {'price': '₦7,000', 'coins': 3000},
     },
   };
 

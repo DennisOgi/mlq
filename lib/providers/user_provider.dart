@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -8,6 +9,9 @@ import '../utils/error_handler.dart';
 import '../services/supabase_service.dart';
 import '../services/offline_persistence_service.dart';
 import '../services/push_notification_service.dart';
+import '../services/referral_service.dart';
+import '../services/subscription_service.dart';
+import '../utils/entitlements.dart';
 
 enum LeaderboardView { global, school }
 
@@ -17,6 +21,7 @@ class UserProvider extends ChangeNotifier {
   List<UserModel> _leaderboardUsers = [];
   List<UserModel> _schoolLeaderboardUsers = [];
   bool _isFirstTimeUser = true;
+  bool _preferLogin = false;
   bool _isAuthenticated = false;
   List<AvatarModel> _unlockedAvatars = [];
   LeaderboardView _leaderboardView = LeaderboardView.global;
@@ -34,7 +39,16 @@ class UserProvider extends ChangeNotifier {
   List<UserModel> get leaderboardUsers => _leaderboardUsers;
   List<UserModel> get schoolLeaderboardUsers => _schoolLeaderboardUsers;
   bool get isFirstTimeUser => _isFirstTimeUser;
+  bool get preferLogin => _preferLogin;
   bool get isAuthenticated => _isAuthenticated;
+
+  /// Returning users who tap "Log in" during onboarding. Memory-only so a
+  /// new signup can still go through onboarding on this device.
+  void showLoginInsteadOfOnboarding() {
+    if (_preferLogin) return;
+    _preferLogin = true;
+    notifyListeners();
+  }
   List<AvatarModel> get unlockedAvatars => _unlockedAvatars;
   LeaderboardView get leaderboardView => _leaderboardView;
   List<Map<String, dynamic>> get schools => _schools;
@@ -54,12 +68,39 @@ class UserProvider extends ChangeNotifier {
   Future<void> refreshEntitlements() async {
     try {
       if (!_supabaseService.isAuthenticated) return;
+      // Keep subscription rows + premium cache in sync before reading entitlements
+      try {
+        await SubscriptionService().checkForExpiredSubscriptions();
+      } catch (_) {}
       final res = await _supabaseService.fetchEntitlements();
+      if (res['_failed'] == true) return;
       final bool isPremiumFlag = (res['is_premium'] == true);
-      if (_user != null && _user!.isPremium != isPremiumFlag) {
-        _user = _user!.copyWith(isPremium: isPremiumFlag);
+      if (_user == null) return;
+
+      String? schoolId = _user!.schoolId;
+      String? schoolName = _user!.schoolName;
+      try {
+        final fresh = await _supabaseService.getUserProfile();
+        if (fresh != null) {
+          schoolId = fresh.schoolId ?? schoolId;
+          schoolName = fresh.schoolName ?? schoolName;
+        }
+      } catch (_) {}
+
+      final hasSchool = schoolId != null && schoolId.trim().isNotEmpty;
+      final paid = isPremiumFlag || _user!.isAdmin || hasSchool;
+      final schoolChanged =
+          schoolId != _user!.schoolId || schoolName != _user!.schoolName;
+      if (_user!.isPremium != paid || schoolChanged) {
+        _user = _user!.copyWith(
+          isPremium: paid,
+          schoolId: schoolId,
+          schoolName: schoolName,
+        );
         await _offlineService.cacheUserProfile(_user!);
         notifyListeners();
+      } else {
+        _user = _user!.copyWith(isPremium: paid);
       }
     } catch (e) {
       debugPrint('Error refreshing entitlements: $e');
@@ -334,6 +375,9 @@ class UserProvider extends ChangeNotifier {
   /// Quick helper to check if a user is premium.
   bool isPremium(String userId) => getUserById(userId)?.isPremium ?? false;
 
+  /// Trial, paid plan, school seat, or admin — used to gate paid features.
+  bool get hasPaidAccess => Entitlements.hasPaidAccess(_user);
+
   /// Check if current user is in trial
   bool get isTrial => _user?.isTrial ?? false;
 
@@ -367,18 +411,35 @@ class UserProvider extends ChangeNotifier {
       
       final freshUser = await _supabaseService.getUserProfile();
       if (freshUser != null) {
+        // Always trust the server's data
+        // The server checks if security_question_1 is not null
         _user = freshUser;
         await _offlineService.cacheUserProfile(_user!);
+
+        // Keep the leaderboard list in sync so the current user's avatar/name
+        // is immediately reflected there without waiting for a full leaderboard refresh.
+        final idx = _leaderboardUsers.indexWhere((u) => u.id == _user!.id);
+        if (idx != -1) {
+          _leaderboardUsers[idx] = _user!;
+        }
         
         // Also refresh entitlements to ensure premium status is up to date
         await refreshEntitlements();
         
         notifyListeners();
-        debugPrint('✅ User data refreshed successfully');
+        debugPrint('✅ User data refreshed (hasSecurityQuestions: ${_user!.hasSecurityQuestions})');
       }
     } catch (e) {
       debugPrint('❌ Error refreshing user data: $e');
     }
+  }
+
+  /// Call after successfully saving security questions so the UI stops prompting.
+  Future<void> markSecurityQuestionsConfigured() async {
+    if (_user == null) return;
+    _user = _user!.copyWith(hasSecurityQuestions: true);
+    await _offlineService.cacheUserProfile(_user!);
+    notifyListeners();
   }
 
   // Initialize with user data from Supabase if available
@@ -395,7 +456,11 @@ class UserProvider extends ChangeNotifier {
   /// Explicitly initialize the user state. 
   /// Calleable from main.dart once Supabase is confirmed ready.
   Future<void> initialize() async {
+    if (_isInitialized && _isAuthenticated) return;
     await _initializeUser();
+    // A concurrent login() may have already authenticated the user.
+    // Never leave a signed-in session marked uninitialized — that keeps
+    // the splash router on LoginScreen after a successful sign-in.
     _isInitialized = true;
     notifyListeners();
   }
@@ -404,33 +469,27 @@ class UserProvider extends ChangeNotifier {
   Future<bool> login({required String email, required String password}) async {
     try {
       _lastErrorMessage = null;
+      if (_isAuthenticated && _supabaseService.isAuthenticated) {
+        _isInitialized = true;
+        _isFirstTimeUser = false;
+        _preferLogin = false;
+        notifyListeners();
+        return true;
+      }
       final response = await _supabaseService.signIn(email: email, password: password);
       
       if (response.user != null) {
         // Load user profile with fresh data including admin status
         _user = await _supabaseService.getUserProfile();
         _isAuthenticated = true;
-        
-        // Set hasCompletedRegistration to true since this is a real user
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool('hasCompletedRegistration', true);
-        await prefs.setBool('isFirstTimeUser', false);
-        
-        // Load user badges after successful login
-        await loadUserBadges();
-
-        // Refresh entitlements (B2B/B2C premium)
-        await refreshEntitlements();
-        
-        // Sync FCM token for push notifications
-        try {
-          await PushNotificationService.instance.syncFcmToken();
-        } catch (e) {
-          debugPrint('FCM token sync after login failed: $e');
-        }
-        
-        debugPrint('User logged in successfully: ${_user?.name}');
+        _isInitialized = true;
+        // Keep memory + prefs in sync so splash routing does not send
+        // returning users back through onboarding after login.
+        _isFirstTimeUser = false;
+        _preferLogin = false;
         notifyListeners();
+
+        unawaited(_hydrateAfterLogin());
         return true;
       }
       // No user returned and no exception thrown
@@ -442,14 +501,49 @@ class UserProvider extends ChangeNotifier {
       return false;
     }
   }
+
+  Future<void> _hydrateAfterLogin() async {
+    try {
+      await _mergeLocalStreak();
+      await _handleDailyStreak();
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('hasCompletedRegistration', true);
+      await prefs.setBool('isFirstTimeUser', false);
+
+      await loadUserBadges();
+      await refreshEntitlements();
+
+      try {
+        await PushNotificationService.instance.syncFcmToken();
+      } catch (e) {
+        debugPrint('FCM token sync after login failed: $e');
+      }
+
+      await _applyPendingReferralCode();
+      debugPrint('User logged in successfully: ${_user?.name}');
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Post-login hydration failed: $e');
+    }
+  }
   
   // Logout method
   Future<void> logout() async {
     try {
+      // Clear server FCM token while session is still valid
+      try {
+        await PushNotificationService.instance.clearTokenState();
+      } catch (e) {
+        debugPrint('Error clearing FCM token state: $e');
+      }
+
       await _supabaseService.signOut();
       // Clear in-memory user-scoped caches to avoid cross-account leakage
       _user = null;
       _isAuthenticated = false;
+      // Returning users should land on Login, not Onboarding.
+      _isFirstTimeUser = false;
       _badges.clear();
       _leaderboardUsers.clear();
       _schoolLeaderboardUsers.clear();
@@ -458,18 +552,14 @@ class UserProvider extends ChangeNotifier {
       // Clear offline caches on disk
       await _offlineService.clearCache();
       
-      // Clear FCM token state on logout
-      try {
-        await PushNotificationService.instance.clearTokenState();
-      } catch (e) {
-        debugPrint('Error clearing FCM token state: $e');
-      }
-      
       // Clear goals cache from SharedPreferences to prevent cross-account leakage
       await _clearGoalsCache();
       
       // Clear gratitude entries cache from SharedPreferences
       await _clearGratitudeCache();
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('isFirstTimeUser', false);
       
       notifyListeners();
     } catch (e) {
@@ -533,7 +623,8 @@ class UserProvider extends ChangeNotifier {
       );
       
       if (response.user != null) {
-        // Save registration state
+        // Save registration state (memory + prefs)
+        _isFirstTimeUser = false;
         final prefs = await SharedPreferences.getInstance();
         await prefs.setBool('hasCompletedRegistration', true);
         await prefs.setBool('isFirstTimeUser', false);
@@ -559,6 +650,8 @@ class UserProvider extends ChangeNotifier {
         } catch (e) {
           debugPrint('FCM token sync after registration failed: $e');
         }
+
+        await _applyPendingReferralCode();
 
         debugPrint('User registered successfully: $email (userId: ${_user?.id})');
         notifyListeners();
@@ -600,18 +693,24 @@ class UserProvider extends ChangeNotifier {
       // OFFLINE-FIRST APPROACH: Load cached data immediately
       await _loadCachedData();
 
-      // If we have cached user data, use it while attempting online sync
-      if (_user != null && _supabaseService.isAuthenticated) {
-        _isFirstTimeUser = false; // WE HAVE CACHED DATA + AUTH: Not first time
-        debugPrint('🔄 Using cached data, triggering background online sync...');
-        
-        // Use microtask to ensure we return from initialize() instantly
-        // and let the event loop process UI frames before starting sync.
-        Future.microtask(() => _attemptOnlineSync());
-        
-        notifyListeners(); // Added notify here so UI can update to 'Not first time'
-        return;
-      }
+        // If we have cached user data, use it while attempting online sync
+        if (_user != null && _supabaseService.isAuthenticated) {
+          _isFirstTimeUser = false; // WE HAVE CACHED DATA + AUTH: Not first time
+          _isAuthenticated = true;
+          debugPrint('🔄 Using cached data, triggering background online sync...');
+          
+          await _handleDailyStreak();
+          
+          // Use microtask to ensure we return from initialize() instantly
+          // and let the event loop process UI frames before starting sync.
+          Future.microtask(() async {
+            await _attemptOnlineSync();
+            await _applyPendingReferralCode();
+          });
+          
+          notifyListeners(); // Added notify here so UI can update to 'Not first time'
+          return;
+        }
 
       // Try to load user from Supabase if authenticated and no cached data
       if (_supabaseService.isAuthenticated) {
@@ -623,6 +722,9 @@ class UserProvider extends ChangeNotifier {
             _isFirstTimeUser = false; // FOUND USER: Not a first-time user
             debugPrint('✅ User loaded from Supabase: ${_user?.name}');
             
+            await _mergeLocalStreak();
+            await _handleDailyStreak();
+            
             // Persist the first-time flag locally so we remember next time
             prefs.setBool('isFirstTimeUser', false);
             
@@ -633,6 +735,7 @@ class UserProvider extends ChangeNotifier {
             // We'll notify once at the end of this block
             await loadUserBadges();
             await refreshEntitlements();
+            await _applyPendingReferralCode();
             
             // Sync FCM token for push notifications (existing session)
             try {
@@ -646,6 +749,9 @@ class UserProvider extends ChangeNotifier {
           }
         } catch (e) {
           debugPrint('❌ Failed to load user from Supabase: $e');
+          // Session is valid even if the profile fetch failed.
+          _isAuthenticated = true;
+          await _applyPendingReferralCode();
           // If we have cached data, continue using it
           if (_user != null) {
             debugPrint('📱 Continuing with cached user data');
@@ -655,6 +761,14 @@ class UserProvider extends ChangeNotifier {
         }
       }
       
+      // A sign-in that finished while this init was in flight must not be
+      // overwritten — that is what leaves users stuck on Login after success.
+      if (_isAuthenticated && _supabaseService.isAuthenticated) {
+        _isFirstTimeUser = false;
+        notifyListeners();
+        return;
+      }
+
       // Check if user has completed registration before
       final hasCompletedRegistration = prefs.getBool('hasCompletedRegistration') ?? false;
       
@@ -679,6 +793,10 @@ class UserProvider extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       debugPrint('❌ Error initializing user: $e');
+      if (_isAuthenticated && _supabaseService.isAuthenticated) {
+        notifyListeners();
+        return;
+      }
       // Try to load cached data as emergency fallback
       await _loadCachedData();
       if (_user == null) {
@@ -734,10 +852,12 @@ class UserProvider extends ChangeNotifier {
     try {
       debugPrint('🔄 Attempting background sync...');
       
-      // Sync user profile
+      // Sync user profile (always refresh wallet fields from server)
       final freshUser = await _supabaseService.getUserProfile();
-      if (freshUser != null && freshUser != _user) {
+      if (freshUser != null) {
         _user = freshUser;
+        _isAuthenticated = true;
+        await _mergeLocalStreak();
         await _offlineService.cacheUserProfile(_user!);
         debugPrint('✅ User profile synced');
       }
@@ -752,6 +872,7 @@ class UserProvider extends ChangeNotifier {
 
       notifyListeners();
       debugPrint('✅ Background sync completed');
+      await _applyPendingReferralCode();
     } catch (e) {
       debugPrint('⚠️ Background sync failed (will retry): $e');
       // Schedule retry
@@ -816,20 +937,24 @@ class UserProvider extends ChangeNotifier {
         _user = await _supabaseService.getUserProfile();
         _isAuthenticated = true;
 
-        // Award 0.5 coins for setting up account (as per requirements)
-        await _supabaseService.addCoins(0.5);
-        if (_user != null) {
-          _user = _user!.copyWith(coins: 0.5);
-        }
-
         // Ensure entitlements are updated for premium access
         await refreshEntitlements();
+        await _applyPendingReferralCode();
       }
       
       notifyListeners();
     } catch (e) {
       debugPrint('Error completing onboarding: $e');
       rethrow;
+    }
+  }
+
+  /// Applies invite-link / pending referral code after auth (best-effort).
+  Future<void> _applyPendingReferralCode() async {
+    try {
+      await ReferralService().tryApplyPendingCode();
+    } catch (e) {
+      debugPrint('Pending referral apply failed: $e');
     }
   }
 
@@ -845,6 +970,7 @@ class UserProvider extends ChangeNotifier {
     int? preferredSendDow,
     int? preferredSendHour,
     int? preferredSendMinute,
+    String? gender,
   }) async {
     if (_user == null) return;
     
@@ -869,6 +995,7 @@ class UserProvider extends ChangeNotifier {
         preferredSendDow: preferredSendDow,
         preferredSendHour: preferredSendHour,
         preferredSendMinute: preferredSendMinute,
+        gender: gender,
       );
       
       // Update local user model
@@ -883,6 +1010,7 @@ class UserProvider extends ChangeNotifier {
         preferredSendDow: preferredSendDow,
         preferredSendHour: preferredSendHour,
         preferredSendMinute: preferredSendMinute,
+        gender: gender,
       );
       
       notifyListeners();
@@ -950,38 +1078,48 @@ class UserProvider extends ChangeNotifier {
     return _unlockedAvatars.any((avatar) => avatar.id == avatarId);
   }
 
-  // Add coins to user (offline-resilient)
+  // Add coins to user (offline-resilient). Positive awards are server-only.
   Future<void> addCoins(double amount) async {
     if (_user == null) return;
-    
+
+    // Positive awards must come from server RPCs; refresh balance instead.
+    if (amount > 0) {
+      debugPrint(
+          '⚠️ Client coin award ignored ($amount). Refreshing balance from server.');
+      try {
+        final profile = await _supabaseService.getUserProfile();
+        if (profile != null) {
+          _user = _user!.copyWith(coins: profile.coins);
+          await _offlineService.cacheUserProfile(_user!);
+          notifyListeners();
+        }
+      } catch (e) {
+        debugPrint('Coin refresh failed: $e');
+      }
+      return;
+    }
+
     try {
-      // Update local user model immediately for responsive UI
-      _user = _user!.copyWith(
-        coins: _user!.coins + amount,
-      );
-      
-      // Cache updated user data
+      _user = _user!.copyWith(coins: _user!.coins + amount);
       await _offlineService.cacheUserProfile(_user!);
       notifyListeners();
-      
+
       if (_offlineService.isOnline) {
-        // Try to sync with server immediately
-        await _supabaseService.addCoins(amount);
-        debugPrint('✅ Coins added and synced: $amount');
+        final ok = await _supabaseService.addCoins(amount);
+        if (!ok) {
+          _user = _user!.copyWith(coins: _user!.coins - amount);
+          await _offlineService.cacheUserProfile(_user!);
+          notifyListeners();
+        }
       } else {
-        // Add to pending actions for later sync
         await _offlineService.addPendingAction('add_coins', {
           'amount': amount,
           'user_id': _user!.id,
         });
-        debugPrint('📴 Coins added offline, will sync when online: $amount');
       }
     } catch (e) {
-      debugPrint('❌ Error adding coins: $e');
-      // Revert local changes if server sync failed
-      _user = _user!.copyWith(
-        coins: _user!.coins - amount,
-      );
+      debugPrint('❌ Error spending coins: $e');
+      _user = _user!.copyWith(coins: _user!.coins - amount);
       await _offlineService.cacheUserProfile(_user!);
       notifyListeners();
     }
@@ -1013,63 +1151,12 @@ class UserProvider extends ChangeNotifier {
     debugPrint('✅ Local coins updated: +$amount');
   }
 
-  // Add XP to user (offline-resilient)
+  // XP is server-authoritative via complete_goal_secure only.
+  @Deprecated('Use updateLocalXp after complete_goal_secure; do not call directly')
   Future<void> addXp(int amount) async {
-    if (_user == null) return;
-    
-    try {
-      // Update local user model immediately for responsive UI
-      _user = _user!.copyWith(
-        xp: _user!.xp + amount,
-      );
-      
-      // Update the user in the leaderboard list to ensure it's reflected immediately
-      final userIndex = _leaderboardUsers.indexWhere((u) => u.id == _user!.id);
-      if (userIndex >= 0) {
-        _leaderboardUsers[userIndex] = _user!;
-      } else if (_user != null) {
-        // If user isn't in leaderboard yet, add them
-        _leaderboardUsers.add(_user!);
-      }
-      
-      // Re-sort the leaderboard after XP update (by monthly XP to match server ordering)
-      _leaderboardUsers.sort((a, b) => b.monthlyXp.compareTo(a.monthlyXp));
-      
-      // Cache updated user and leaderboard data
-      await _offlineService.cacheUserProfile(_user!);
-      await _offlineService.cacheLeaderboard(_leaderboardUsers);
-      
-      // Refresh UI
-      notifyListeners();
-      
-      if (_offlineService.isOnline) {
-        // Try to sync with server immediately
-        await _supabaseService.addXp(amount);
-        debugPrint('✅ XP added and synced: $amount');
-        
-        // Fetch updated leaderboard from server in background (without overwriting current user)
-        _fetchLeaderboardUsers().then((_) {
-          // After fetching leaderboard, ensure current user's XP is not overwritten
-          // by stale data from the leaderboard fetch
-          notifyListeners();
-        });
-      } else {
-        // Add to pending actions for later sync
-        await _offlineService.addPendingAction('add_xp', {
-          'amount': amount,
-          'user_id': _user!.id,
-        });
-        debugPrint('📴 XP added offline, will sync when online: $amount');
-      }
-    } catch (e) {
-      debugPrint('❌ Error adding XP: $e');
-      // Revert local changes if server sync failed
-      _user = _user!.copyWith(
-        xp: _user!.xp - amount,
-      );
-      await _offlineService.cacheUserProfile(_user!);
-      notifyListeners();
-    }
+    debugPrint(
+      '[UserProvider] addXp ignored ($amount) — XP comes from daily goals, quizzes, or gratitude only',
+    );
   }
 
   // Add a badge
@@ -1245,7 +1332,6 @@ class UserProvider extends ChangeNotifier {
           if (norm == 'goal ninja') badgeType = BadgeType.goalNinja;
           else if (norm == 'challenge champion') badgeType = BadgeType.challengeChampion;
           else if (norm == 'streak master') badgeType = BadgeType.streakMaster;
-          else if (norm == 'helpful hero') badgeType = BadgeType.helpfulHero;
           else if (norm == 'knowledge seeker') badgeType = BadgeType.knowledgeSeeker;
           else if (norm == 'healthy habit hero') badgeType = BadgeType.healthyHabitHero;
           else if (norm == 'social butterfly') badgeType = BadgeType.socialButterfly;
@@ -1326,8 +1412,84 @@ class UserProvider extends ChangeNotifier {
       
       debugPrint('✅ Onboarding status reset - restart app to see onboarding');
     } catch (e) {
-      debugPrint('❌ Error resetting onboarding status: $e');
+      debugPrint('🚨 Error resetting onboarding status: $e');
       rethrow;
+    }
+  }
+
+  // Gamification: Handle Daily Streaks
+  Future<void> _handleDailyStreak() async {
+    if (_user == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final streakKey = 'streak_count_${_user!.id}';
+      final dateKey = 'streak_date_${_user!.id}';
+      
+      final currentStreak = prefs.getInt(streakKey) ?? 0;
+      final lastActiveStr = prefs.getString(dateKey);
+      
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      
+      int newStreak = currentStreak;
+      DateTime? lastActive;
+      
+      if (lastActiveStr != null) {
+        lastActive = DateTime.parse(lastActiveStr);
+        final lastActiveDay = DateTime(lastActive.year, lastActive.month, lastActive.day);
+        
+        final difference = today.difference(lastActiveDay).inDays;
+        
+        if (difference == 1) {
+          // Came back the next day
+          newStreak += 1;
+        } else if (difference > 1) {
+          // Missed a day or more
+          newStreak = 1;
+        }
+      } else {
+        // First time
+        newStreak = 1;
+      }
+      
+      await prefs.setInt(streakKey, newStreak);
+      await prefs.setString(dateKey, now.toIso8601String());
+      
+      _user = _user!.copyWith(
+        currentStreak: newStreak,
+        lastActiveDate: now,
+      );
+      
+      // Update cache
+      await _offlineService.cacheUserProfile(_user!);
+      
+    } catch (e) {
+      debugPrint('Error handling daily streak: $e');
+    }
+  }
+
+  // Helper to merge local streak when receiving fresh data from server
+  Future<void> _mergeLocalStreak() async {
+    if (_user == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final streakKey = 'streak_count_${_user!.id}';
+      final dateKey = 'streak_date_${_user!.id}';
+      
+      final currentStreak = prefs.getInt(streakKey) ?? _user!.currentStreak;
+      final lastActiveStr = prefs.getString(dateKey);
+      
+      DateTime? lastActive = _user!.lastActiveDate;
+      if (lastActiveStr != null) {
+        lastActive = DateTime.parse(lastActiveStr);
+      }
+      
+      _user = _user!.copyWith(
+        currentStreak: currentStreak,
+        lastActiveDate: lastActive,
+      );
+    } catch (e) {
+      debugPrint('Error merging local streak: $e');
     }
   }
 }

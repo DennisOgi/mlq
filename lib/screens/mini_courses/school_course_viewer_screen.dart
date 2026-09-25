@@ -6,6 +6,8 @@ import '../../models/school_course_model.dart';
 import '../../providers/school_course_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/entitlements.dart';
+import '../../widgets/feature_lock_card.dart';
 
 /// Screen for viewing and completing a school course
 class SchoolCourseViewerScreen extends StatefulWidget {
@@ -72,6 +74,23 @@ class _SchoolCourseViewerScreenState extends State<SchoolCourseViewerScreen> {
         backgroundColor: AppColors.background,
         appBar: AppBar(title: const Text('Loading...')),
         body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final user = context.watch<UserProvider>().user;
+    if (!Entitlements.canUseMiniCourses(user)) {
+      return Scaffold(
+        backgroundColor: AppColors.background,
+        appBar: AppBar(title: const Text('School Course')),
+        body: const Padding(
+          padding: EdgeInsets.all(24),
+          child: FeatureLockCard(
+            title: 'Mini-Courses',
+            description:
+                'Free accounts include mini-courses for 7 days. Subscribe to keep school lessons.',
+            icon: Icons.school_rounded,
+          ),
+        ),
       );
     }
 

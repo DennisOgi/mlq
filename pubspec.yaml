@@ -2,7 +2,7 @@ name: my_leadership_quest
 description: "A gamified goal-setting app for kids with AI coaching"
 publish_to: "none"
 
-version: 1.0.0+29
+version: 1.0.6+47
 
 environment:
   sdk: ">=3.2.3 <4.0.0"
@@ -39,10 +39,12 @@ dependencies:
   # Video
   video_player: ^2.10.0
   chewie: ^1.11.3
+  youtube_player_flutter: ^9.1.0
 
   # Utilities
   intl: ^0.20.2
   shared_preferences: ^2.2.2
+  app_links: ^6.4.0
   url_launcher: ^6.2.5
   image_picker: ^1.0.7
   path_provider: ^2.1.2
@@ -56,9 +58,8 @@ dependencies:
   flutter_secure_storage: ^9.0.0 # For secure storage of API keys and sensitive data
   connectivity_plus: ^6.1.5 # For network connectivity monitoring
 
-  # Payments (temporarily disabled for Windows build)
-  # flutterwave_standard: ^1.0.8
-  # webview_flutter: ^4.4.2
+  # Payments — WebView hosts Flutterwave checkout on mobile
+  webview_flutter: ^4.4.2
 
   # Push & Local Notifications
   # Firebase is only used on mobile (Android/iOS) for push notifications
@@ -72,6 +73,7 @@ dependencies:
 
   # In-App Updates (Play Store automatic updates)
   in_app_update: ^4.2.3
+  audioplayers: ^6.6.0
 
 dev_dependencies:
   flutter_test:
@@ -97,6 +99,7 @@ flutter:
     - assets/icons/
     - assets/animations/
     - assets/images/badges/
+    - assets/images/ui/covers/
     - assets/legal/
 
   # An image asset can refer to one or more resolution-specific "variants", see

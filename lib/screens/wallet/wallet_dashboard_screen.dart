@@ -8,9 +8,9 @@ import '../../models/wallet_transaction_model.dart';
 import '../../models/savings_goal_model.dart';
 import '../../providers/user_provider.dart';
 import '../../services/wallet_service.dart';
-import '../../services/bank_integration_service.dart';
+import '../challenges/challenges_screen.dart';
 import 'savings_goal_screen.dart';
-import 'bank_setup_screen.dart';
+import 'wallet_activation_screen.dart';
 import 'withdrawal_request_screen.dart';
 import 'withdrawal_history_screen.dart';
 
@@ -22,15 +22,12 @@ class WalletDashboardScreen extends StatefulWidget {
 }
 
 class _WalletDashboardScreenState extends State<WalletDashboardScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   final WalletService _walletService = WalletService();
-  final BankIntegrationService _bankService = BankIntegrationService();
 
   bool _isLoading = true;
   double _walletBalance = 0.0;
   String _walletStatus = 'inactive';
-  bool _isSandboxMode = true;
-  bool _hasBankAccount = false;
   List<WalletTransactionModel> _transactions = [];
   List<SavingsGoalModel> _savingsGoals = [];
 
@@ -58,11 +55,20 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
       CurvedAnimation(parent: _balanceAnimController, curve: Curves.easeOutCubic),
     );
 
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadWalletData());
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadWalletData();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _balanceAnimController.dispose();
     _orbitController.dispose();
     super.dispose();
@@ -85,16 +91,31 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
     final transactions = results[1] as List<WalletTransactionModel>;
     final goals = results[2] as List<SavingsGoalModel>;
     final newBalance = (status['balance'] as num).toDouble();
+    final resolvedStatus = WalletService.normalizeWalletStatus(
+      status['status'],
+      activatedAt: status['activated_at'] != null
+          ? DateTime.tryParse(status['activated_at'].toString())
+          : null,
+      balance: newBalance,
+    );
 
     setState(() {
-      _walletStatus = status['status'] as String;
-      _hasBankAccount = status['has_bank_account'] as bool? ?? false;
-      _isSandboxMode = status['is_sandbox'] as bool? ?? true;
+      _walletStatus = resolvedStatus;
       _transactions = transactions;
       _savingsGoals = goals;
       _walletBalance = newBalance;
       _isLoading = false;
     });
+
+    final userProvider = Provider.of<UserProvider>(context, listen: false);
+    userProvider.updateUser(user.copyWith(
+      walletBalance: newBalance,
+      walletStatus: resolvedStatus,
+      walletActivatedAt: status['activated_at'] != null
+          ? DateTime.tryParse(status['activated_at'].toString())
+          : user.walletActivatedAt,
+    ));
+    await userProvider.refreshUser();
 
     _balanceAnim = Tween<double>(begin: 0, end: newBalance).animate(
       CurvedAnimation(parent: _balanceAnimController, curve: Curves.easeOutCubic),
@@ -105,10 +126,10 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0D0820),
+      backgroundColor: AppColors.walletBgDeep,
       body: RefreshIndicator(
         onRefresh: _loadWalletData,
-        color: const Color(0xFFFFD700),
+        color: AppColors.walletGold,
         child: CustomScrollView(
           slivers: [
             _buildHeroHeader(),
@@ -118,7 +139,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
                       height: 300,
                       child: Center(
                         child: CircularProgressIndicator(
-                          color: Color(0xFFFFD700),
+                          color: AppColors.walletGold,
                           strokeWidth: 2,
                         ),
                       ),
@@ -137,7 +158,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
     return SliverAppBar(
       expandedHeight: 320,
       pinned: true,
-      backgroundColor: const Color(0xFF0D0820),
+      backgroundColor: AppColors.walletBgDeep,
       leading: GestureDetector(
         onTap: () => Navigator.pop(context),
         child: Container(
@@ -227,16 +248,16 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
         final t = _orbitController.value;
         return Stack(
           children: [
-            // Deep purple base
+            // Deep purple brand base
             Container(
               decoration: const BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                   colors: [
-                    Color(0xFF1A0533),
-                    Color(0xFF0D0820),
-                    Color(0xFF0A1628),
+                    AppColors.walletBg,
+                    AppColors.walletBgDeep,
+                    AppColors.primaryDark,
                   ],
                 ),
               ),
@@ -252,7 +273,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
                   shape: BoxShape.circle,
                   gradient: RadialGradient(
                     colors: [
-                      AppColors.primary.withOpacity(0.35),
+                      AppColors.primary.withOpacity(0.45),
                       AppColors.primary.withOpacity(0),
                     ],
                   ),
@@ -269,7 +290,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
                   shape: BoxShape.circle,
                   gradient: RadialGradient(
                     colors: [
-                      const Color(0xFF00C4FF).withOpacity(0.25),
+                      AppColors.walletBgMid.withOpacity(0.55),
                       Colors.transparent,
                     ],
                   ),
@@ -286,7 +307,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
                   shape: BoxShape.circle,
                   gradient: RadialGradient(
                     colors: [
-                      const Color(0xFFFFD700).withOpacity(0.15),
+                      AppColors.walletGold.withOpacity(0.18),
                       Colors.transparent,
                     ],
                   ),
@@ -300,7 +321,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
                   begin: Alignment.bottomCenter,
                   end: Alignment.topCenter,
                   colors: [
-                    const Color(0xFF0D0820).withOpacity(0.6),
+                    AppColors.walletBgDeep.withOpacity(0.65),
                     Colors.transparent,
                   ],
                   stops: const [0, 0.5],
@@ -328,11 +349,11 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
               gradient: const LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [Color(0xFFFFD700), Color(0xFFFF9500)],
+                colors: [AppColors.walletGold, AppColors.accent2],
               ),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFFFFD700).withOpacity(0.5),
+                  color: AppColors.walletGold.withOpacity(0.5),
                   blurRadius: 30,
                   spreadRadius: 4,
                 ),
@@ -355,7 +376,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
       builder: (context, child) {
         return ShaderMask(
           shaderCallback: (bounds) => const LinearGradient(
-            colors: [Color(0xFFFFFFFF), Color(0xFFFFD700)],
+            colors: [Color(0xFFFFFFFF), AppColors.secondaryBright],
           ).createShader(bounds),
           child: Text(
             '₦${_nairaFormat.format(_balanceAnim.value)}',
@@ -435,7 +456,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
   Widget _buildBody() {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFFF5F7FA),
+        color: AppColors.background,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
         boxShadow: [
           BoxShadow(
@@ -464,51 +485,6 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
           ),
           const SizedBox(height: 8),
 
-          // Sandbox mode banner (if applicable)
-          if (_isSandboxMode)
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFF3CD),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFFFE69C)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.science_outlined, color: Color(0xFF856404), size: 20),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Sandbox Mode',
-                          style: TextStyle(
-                            fontFamily: 'Nunito',
-                            fontSize: 13,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.grey.shade800,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          _hasBankAccount
-                              ? 'Using mock bank integration for testing'
-                              : 'Complete bank setup to activate real money features',
-                          style: TextStyle(
-                            fontFamily: 'Nunito',
-                            fontSize: 11,
-                            color: Colors.grey.shade700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
           // Quick actions
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -519,8 +495,8 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
           ),
           const SizedBox(height: 28),
 
-          // Activation CTA (only if inactive)
-          if (_walletStatus == 'inactive') ...[
+          // Activation CTA (inactive or awaiting parent consent)
+          if (_walletStatus == 'inactive' || _walletStatus == 'pending_consent') ...[
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: _buildActivationCard()
@@ -541,20 +517,20 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
           ),
           const SizedBox(height: 28),
 
-          // Savings goals
+          // Recent earnings
           Padding(
-            padding: const EdgeInsets.only(left: 20, right: 20),
-            child: _buildSavingsSection()
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: _buildTransactionsSection()
                 .animate()
                 .fadeIn(duration: 500.ms, delay: 350.ms)
                 .slideY(begin: 0.15, end: 0, curve: Curves.easeOutCubic),
           ),
           const SizedBox(height: 28),
 
-          // Recent transactions
+          // Savings goals
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: _buildTransactionsSection()
+            padding: const EdgeInsets.only(left: 20, right: 20),
+            child: _buildSavingsSection()
                 .animate()
                 .fadeIn(duration: 500.ms, delay: 450.ms)
                 .slideY(begin: 0.15, end: 0, curve: Curves.easeOutCubic),
@@ -568,33 +544,58 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
   // ─── Quick Actions ───────────────────────────────────────────────────
 
   Widget _buildQuickActions() {
+    final walletActive = _walletStatus == 'active';
+
+    void onWithdrawTap() {
+      if (!walletActive) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Activate LeadWallet with one-time parent approval before withdrawing.'),
+          ),
+        );
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const WalletActivationScreen()),
+        ).then((_) => _loadWalletData());
+        return;
+      }
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const WithdrawalRequestScreen()),
+      ).then((_) => _loadWalletData());
+    }
+
     final actions = [
       {
         'icon': Icons.account_balance_wallet_rounded,
         'label': 'Withdraw',
-        'colors': [const Color(0xFFFFD700), const Color(0xFFE5A800)],
-        'onTap': () => Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const WithdrawalRequestScreen())).then((_) => _loadWalletData()),
+        'primary': walletActive,
+        'onTap': onWithdrawTap,
       },
       {
         'icon': Icons.savings_rounded,
         'label': 'Save',
-        'colors': [const Color(0xFF00E096), const Color(0xFF00B075)],
+        'primary': false,
         'onTap': () => Navigator.push(context,
             MaterialPageRoute(builder: (_) => const SavingsGoalScreen())),
       },
       {
         'icon': Icons.receipt_long_rounded,
         'label': 'Requests',
-        'colors': [const Color(0xFF4F8EF7), const Color(0xFF3B6FD4)],
+        'primary': false,
         'onTap': () => Navigator.push(context,
             MaterialPageRoute(builder: (_) => const WithdrawalHistoryScreen())),
       },
       {
         'icon': Icons.emoji_events_rounded,
         'label': 'Earn',
-        'colors': [const Color(0xFFFF6B9D), const Color(0xFFE0508A)],
-        'onTap': () => Navigator.pushNamed(context, '/challenges'),
+        'primary': false,
+        'onTap': () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const ChallengesScreen(),
+              ),
+            ),
       },
     ];
 
@@ -602,44 +603,37 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
       children: actions.asMap().entries.map((entry) {
         final i = entry.key;
         final a = entry.value;
-        final colors = a['colors'] as List<Color>;
+        final primary = a['primary'] as bool;
+        final bg = primary ? AppColors.secondary : AppColors.primarySoft;
+        final fg = primary ? AppColors.textOnGold : AppColors.primary;
         return Expanded(
           child: Padding(
             padding: EdgeInsets.only(right: i < actions.length - 1 ? 10 : 0),
-            child: GestureDetector(
-              onTap: a['onTap'] as VoidCallback,
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: colors,
-                  ),
-                  borderRadius: BorderRadius.circular(18),
-                  boxShadow: [
-                    BoxShadow(
-                      color: colors.first.withOpacity(0.35),
-                      blurRadius: 14,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(a['icon'] as IconData, color: Colors.white, size: 24),
-                    const SizedBox(height: 6),
-                    Text(
-                      a['label'] as String,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.3,
+            child: Material(
+              color: bg,
+              borderRadius: BorderRadius.circular(18),
+              child: InkWell(
+                onTap: a['onTap'] as VoidCallback,
+                borderRadius: BorderRadius.circular(18),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(a['icon'] as IconData, color: fg, size: 24),
+                      const SizedBox(height: 6),
+                      Text(
+                        a['label'] as String,
+                        style: TextStyle(
+                          fontFamily: 'Nunito',
+                          color: fg,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.2,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -655,33 +649,36 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
     final totalEarned = _transactions
         .where((t) => t.isCredit)
         .fold(0.0, (sum, t) => sum + t.displayAmount);
+    final totalWithdrawn = _transactions
+        .where((t) => t.type == 'payout')
+        .fold(0.0, (sum, t) => sum + t.displayAmount);
     final totalSaved = _savingsGoals
         .fold(0.0, (sum, g) => sum + g.currentAmount);
 
     return Row(
       children: [
         _buildStatCard(
-          label: 'Total Earned',
+          label: 'Total earned',
           value: '₦${_nairaShort.format(totalEarned)}',
           icon: Icons.trending_up_rounded,
-          iconColor: AppColors.success,
-          bgColor: const Color(0xFFE8FAF0),
+          iconColor: AppColors.goldText,
+          bgColor: AppColors.secondary.withOpacity(0.22),
         ),
         const SizedBox(width: 12),
         _buildStatCard(
-          label: 'Total Saved',
+          label: 'Withdrawn',
+          value: '₦${_nairaShort.format(totalWithdrawn)}',
+          icon: Icons.account_balance_rounded,
+          iconColor: AppColors.primary,
+          bgColor: AppColors.primarySoft,
+        ),
+        const SizedBox(width: 12),
+        _buildStatCard(
+          label: 'Saved',
           value: '₦${_nairaShort.format(totalSaved)}',
           icon: Icons.savings_rounded,
-          iconColor: const Color(0xFF4F8EF7),
-          bgColor: const Color(0xFFEBF3FF),
-        ),
-        const SizedBox(width: 12),
-        _buildStatCard(
-          label: 'Goals Active',
-          value: '${_savingsGoals.length}',
-          icon: Icons.flag_rounded,
-          iconColor: const Color(0xFFFF6B9D),
-          bgColor: const Color(0xFFFFF0F5),
+          iconColor: AppColors.primary,
+          bgColor: AppColors.primarySoft,
         ),
       ],
     );
@@ -726,7 +723,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
                 fontFamily: 'Nunito',
                 fontSize: 16,
                 fontWeight: FontWeight.w900,
-                color: Color(0xFF1A1A2E),
+                color: AppColors.textPrimary,
               ),
             ),
             Text(
@@ -747,7 +744,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
   // ─── Activation Card ─────────────────────────────────────────────────
 
   Widget _buildActivationCard() {
-    final user = Provider.of<UserProvider>(context, listen: false).user;
+    final isPending = _walletStatus == 'pending_consent';
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -755,7 +752,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF1A0533), Color(0xFF2D0854)],
+          colors: [AppColors.walletBg, AppColors.walletBgMid],
         ),
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
@@ -773,10 +770,10 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
             width: 56,
             height: 56,
             decoration: BoxDecoration(
-              color: const Color(0xFFFFD700).withOpacity(0.15),
+              color: AppColors.secondary.withOpacity(0.15),
               borderRadius: BorderRadius.circular(16),
               border: Border.all(
-                color: const Color(0xFFFFD700).withOpacity(0.3),
+                color: AppColors.secondary.withOpacity(0.3),
               ),
             ),
             child: const Center(
@@ -792,9 +789,9 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Activate LeadWallet!',
-                  style: TextStyle(
+                Text(
+                  isPending ? 'Waiting for parent approval' : 'Activate LeadWallet!',
+                  style: const TextStyle(
                     fontFamily: 'Nunito',
                     color: Colors.white,
                     fontSize: 15,
@@ -803,7 +800,9 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Set up your bank account to start earning real rewards',
+                  isPending
+                      ? 'Ask your parent to open Parent Portal and approve LeadWallet.'
+                      : 'One-time parent approval is required before you can receive cash rewards.',
                   style: TextStyle(
                     fontFamily: 'Nunito',
                     color: Colors.white.withOpacity(0.7),
@@ -816,7 +815,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => const BankSetupScreen(),
+                        builder: (_) => const WalletActivationScreen(),
                       ),
                     ).then((_) => _loadWalletData());
                   },
@@ -824,18 +823,16 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
                     padding: const EdgeInsets.symmetric(
                         horizontal: 16, vertical: 8),
                     decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFFFFD700), Color(0xFFFF9500)],
-                      ),
-                      borderRadius: BorderRadius.circular(20),
+                      color: AppColors.secondary,
+                      borderRadius: BorderRadius.circular(14),
                     ),
-                    child: const Text(
-                      'Start Setup →',
-                      style: TextStyle(
+                    child: Text(
+                      isPending ? 'Check status →' : 'Activate →',
+                      style: const TextStyle(
                         fontFamily: 'Nunito',
-                        color: Colors.white,
+                        color: AppColors.textOnGold,
                         fontSize: 12,
-                        fontWeight: FontWeight.w700,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
                   ),
@@ -863,7 +860,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
                 fontFamily: 'Nunito',
                 fontSize: 20,
                 fontWeight: FontWeight.w800,
-                color: Color(0xFF1A1A2E),
+                color: AppColors.textPrimary,
               ),
             ),
             GestureDetector(
@@ -954,11 +951,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
 
   Widget _buildGoalCard(SavingsGoalModel goal) {
     final pct = goal.progress;
-    final progressColor = pct > 0.7
-        ? AppColors.success
-        : pct > 0.3
-            ? const Color(0xFFFFB800)
-            : const Color(0xFF4F8EF7);
+    final progressColor = pct >= 1 ? AppColors.success : AppColors.goldPressed;
 
     return Container(
       width: 190,
@@ -1005,7 +998,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
               fontFamily: 'Nunito',
               fontWeight: FontWeight.w800,
               fontSize: 14,
-              color: Color(0xFF1A1A2E),
+              color: AppColors.textPrimary,
             ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
@@ -1049,6 +1042,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
   // ─── Transactions ─────────────────────────────────────────────────────
 
   Widget _buildTransactionsSection() {
+    final earnings = _transactions.where((t) => t.isCredit).take(5).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1056,31 +1050,39 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             const Text(
-              'Recent Activity',
+              'Recent earnings',
               style: TextStyle(
                 fontFamily: 'Nunito',
                 fontSize: 20,
                 fontWeight: FontWeight.w800,
-                color: Color(0xFF1A1A2E),
+                color: AppColors.textPrimary,
               ),
             ),
-            if (_transactions.length > 5)
-              GestureDetector(
-                onTap: _showFullHistory,
-                child: Text(
-                  'See All',
+            if (_transactions.isNotEmpty)
+              TextButton(
+                onPressed: _showFullHistory,
+                style: TextButton.styleFrom(
+                  backgroundColor: AppColors.primarySoft,
+                  foregroundColor: AppColors.primary,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text(
+                  'See history',
                   style: TextStyle(
                     fontFamily: 'Nunito',
-                    color: AppColors.primary,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
                   ),
                 ),
               ),
           ],
         ),
         const SizedBox(height: 14),
-        _transactions.isEmpty
+        earnings.isEmpty
             ? _buildEmptyTransactions()
             : Container(
                 decoration: BoxDecoration(
@@ -1097,13 +1099,13 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
                 child: ListView.separated(
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
-                  itemCount: math.min(_transactions.length, 5),
-                  separatorBuilder: (_, __) => Divider(
+                  itemCount: earnings.length,
+                  separatorBuilder: (_, __) => const Divider(
                     height: 1,
                     indent: 70,
-                    color: Colors.grey.shade100,
+                    color: AppColors.border,
                   ),
-                  itemBuilder: (_, i) => _buildTxTile(_transactions[i]),
+                  itemBuilder: (_, i) => _buildTxTile(earnings[i]),
                 ),
               ),
       ],
@@ -1122,7 +1124,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
           const Text('💫', style: TextStyle(fontSize: 44)),
           const SizedBox(height: 12),
           Text(
-            'No transactions yet',
+            'No earnings yet',
             style: TextStyle(
               fontFamily: 'Nunito',
               fontSize: 16,
@@ -1147,7 +1149,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
 
   Widget _buildTxTile(WalletTransactionModel tx) {
     final isCredit = tx.isCredit;
-    final color = isCredit ? AppColors.success : AppColors.error;
+    final color = isCredit ? AppColors.success : AppColors.textSecondary;
     final dateStr = DateFormat('MMM d, h:mm a').format(tx.createdAt);
 
     final iconData = switch (tx.type) {
@@ -1182,7 +1184,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
                     fontFamily: 'Nunito',
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
-                    color: Color(0xFF1A1A2E),
+                    color: AppColors.textPrimary,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -1275,7 +1277,7 @@ class _WalletDashboardScreenState extends State<WalletDashboardScreen>
                           fontFamily: 'Nunito',
                           fontSize: 22,
                           fontWeight: FontWeight.w900,
-                          color: Color(0xFF1A1A2E),
+                          color: AppColors.textPrimary,
                         )),
                     Text('${_transactions.length} records',
                         style:

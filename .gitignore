@@ -61,3 +61,6 @@ nuget.exe
 *.zip
 *.exe
 !windows/runner/*.exe
+
+# Sensitive one-off exports (password resets, etc.)
+jnissi_password_reset_*.csv

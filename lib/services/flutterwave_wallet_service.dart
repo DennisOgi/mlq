@@ -14,7 +14,7 @@ import 'package:my_leadership_quest/services/supabase_service.dart';
 /// - Flutter app NEVER calls Flutterwave directly
 /// - All transfers via backend Edge Functions
 /// - Webhook verification for transfer status
-/// - Parent consent required for withdrawals
+/// - One-time parent consent required for wallet activation (not per withdrawal)
 /// - Admin approval for high-value withdrawals
 /// 
 /// FLOW:
@@ -30,10 +30,14 @@ class FlutterwaveWalletService {
   factory FlutterwaveWalletService() => _instance;
   FlutterwaveWalletService._internal();
 
-  final SupabaseClient _client = SupabaseService().client;
+  // Lazy: avoid touching Supabase before initialize() (hot restart / early routes).
+  SupabaseClient get _client => SupabaseService().client;
 
   // Expose client for direct database access when needed
   SupabaseClient get client => _client;
+
+  /// True when Flutterwave keys are in TEST/sandbox mode (only Access Bank works).
+  bool isFlutterwaveSandbox = false;
 
   // ─── Bank Account Management ────────────────────────────────────────
 
@@ -47,6 +51,7 @@ class FlutterwaveWalletService {
       if (response.status == 200 && response.data is Map) {
         final data = response.data as Map;
         if (data['success'] == true && data['banks'] is List) {
+          isFlutterwaveSandbox = data['is_sandbox'] == true;
           return List<Map<String, dynamic>>.from(data['banks']);
         }
       }
@@ -77,20 +82,58 @@ class FlutterwaveWalletService {
         },
       );
 
-      if (response.status == 200 && response.data is Map) {
-        final data = response.data as Map;
+      if (response.data is Map) {
+        final data = Map<String, dynamic>.from(response.data as Map);
+        if (data['success'] == true) {
+          return {
+            'success': true,
+            'account_name': data['account_name'],
+            'account_number': data['account_number'],
+          };
+        }
         return {
-          'success': data['success'] ?? false,
-          'account_name': data['account_name'],
-          'account_number': data['account_number'],
+          'success': false,
+          'error': _friendlyValidationError(
+            data['error']?.toString() ?? 'Validation failed',
+          ),
         };
       }
 
       return {'success': false, 'error': 'Validation failed'};
     } catch (e) {
       debugPrint('❌ [FlutterwaveWallet] Error validating account: $e');
-      return {'success': false, 'error': e.toString()};
+      final raw = _extractFunctionError(e);
+      return {'success': false, 'error': _friendlyValidationError(raw)};
     }
+  }
+
+  String _extractFunctionError(Object e) {
+    try {
+      // FunctionException from functions_client exposes .details on 4xx/5xx.
+      final details = (e as dynamic).details;
+      if (details is Map && details['error'] != null) {
+        return details['error'].toString();
+      }
+    } catch (_) {}
+    return e.toString();
+  }
+
+  String _friendlyValidationError(String raw) {
+    if (raw.contains('only 044 is allowed') ||
+        raw.contains('Test mode only supports Access Bank')) {
+      return 'Test mode only supports Access Bank. Please select Access Bank '
+          'to validate an account, or use live Flutterwave keys for other banks.';
+    }
+    if (RegExp(r'could not connect to your bank', caseSensitive: false)
+        .hasMatch(raw)) {
+      return 'Bank lookup is temporarily unavailable. Please try again in a '
+          'few minutes, or use a different Nigerian bank account.';
+    }
+    if (raw.startsWith('FunctionException')) {
+      return 'Could not validate this account. Please check the bank and '
+          'account number, then try again.';
+    }
+    return raw;
   }
 
   // ─── Withdrawal Requests ────────────────────────────────────────────
@@ -109,43 +152,29 @@ class FlutterwaveWalletService {
     try {
       debugPrint('💸 [FlutterwaveWallet] Creating withdrawal request: ₦${amountKobo / 100}');
 
-      // Check wallet balance (in kobo)
-      final balance = await _getWalletBalanceKobo(userId);
-      if (balance < amountKobo) {
-        return {
-          'success': false,
-          'error': 'Insufficient balance. Available: ₦${balance / 100}',
-        };
-      }
-
-      // Check parent consent
-      final consentStatus = await _checkPayoutConsent(userId);
-      if (consentStatus != 'approved') {
-        return {
-          'success': false,
-          'error': 'Parent consent required for withdrawals',
-        };
-      }
-
-      // Generate unique reference
       final reference = generateTransferReference(userId);
 
-      // Create withdrawal request
-      final response = await _client.from('withdrawal_requests').insert({
-        'student_id': userId,
-        'amount_kobo': amountKobo,
-        'bank_code': accountBank,
-        'account_number': accountNumber,
-        'account_name': accountName,
-        'status': 'pending_parent_approval',
-        'flutterwave_reference': reference,
-      }).select().single();
+      final result = await _client.rpc('create_withdrawal_request', params: {
+        'p_amount_kobo': amountKobo,
+        'p_bank_code': accountBank,
+        'p_account_number': accountNumber,
+        'p_account_name': accountName,
+        'p_flutterwave_reference': reference,
+      });
+
+      final map = Map<String, dynamic>.from(result as Map);
+      if (map['success'] != true) {
+        return {
+          'success': false,
+          'error': map['error']?.toString() ?? 'Withdrawal request failed',
+        };
+      }
 
       return {
         'success': true,
-        'withdrawal_id': response['id'],
+        'withdrawal_id': map['withdrawal_id'],
         'reference': reference,
-        'status': 'pending_parent_approval',
+        'status': 'pending_admin_approval',
       };
     } catch (e) {
       debugPrint('❌ [FlutterwaveWallet] Error creating withdrawal request: $e');
@@ -183,24 +212,62 @@ class FlutterwaveWalletService {
         body: {'withdrawal_id': withdrawalId},
       );
 
-      if (response.status == 200 && response.data is Map) {
-        final data = response.data as Map;
+      if (response.data is Map) {
+        final data = Map<String, dynamic>.from(response.data as Map);
         if (data['success'] == true) {
           return {
             'success': true,
             'transfer_id': data['transfer_id'],
             'reference': data['reference'],
-            'status': 'processing',
+            'status': data['status'] ?? 'processing',
+            'simulated': data['simulated'] == true,
           };
         }
-        throw Exception(data['error']?.toString() ?? 'Transfer failed');
+        return {
+          'success': false,
+          'error': _friendlyPayoutError(data['error']?.toString()),
+          'error_code': data['error_code'],
+        };
       }
 
-      throw Exception('Transfer failed');
+      return {
+        'success': false,
+        'error': _friendlyPayoutError(response.data?.toString()),
+      };
+    } on FunctionException catch (e) {
+      final details = e.details;
+      String? message;
+      if (details is Map) {
+        message = details['error']?.toString();
+      }
+      debugPrint('❌ [FlutterwaveWallet] Error processing withdrawal: $e');
+      return {
+        'success': false,
+        'error': _friendlyPayoutError(message ?? e.reasonPhrase ?? e.toString()),
+      };
     } catch (e) {
       debugPrint('❌ [FlutterwaveWallet] Error processing withdrawal: $e');
-      return {'success': false, 'error': e.toString()};
+      return {'success': false, 'error': _friendlyPayoutError(e.toString())};
     }
+  }
+
+  String _friendlyPayoutError(String? raw) {
+    final text = raw?.trim() ?? '';
+    if (text.isEmpty) return 'Transfer failed. Please try again.';
+    if (text.contains('FunctionException')) {
+      final match = RegExp(r'error:\s*([^,}]+)').firstMatch(text);
+      if (match != null) {
+        return _friendlyPayoutError(match.group(1));
+      }
+    }
+    if (RegExp(r'ip whitelisting', caseSensitive: false).hasMatch(text)) {
+      return 'Flutterwave blocked the payout: IP whitelisting is required.\n\n'
+          'Fix in Flutterwave Dashboard:\n'
+          '1. Settings → Whitelisted IP addresses → Add 0.0.0.0 (sandbox) or your server IPs\n'
+          '2. Settings → Business preference → Security → Transfer preferences → API or API + Dashboard\n\n'
+          'Supabase Edge Functions use dynamic IPs, so use 0.0.0.0 for sandbox testing.';
+    }
+    return text;
   }
 
   /// Get wallet balance in kobo (₦1 = 100 kobo)
@@ -220,52 +287,54 @@ class FlutterwaveWalletService {
     }
   }
 
-  // ─── Consent Management ─────────────────────────────────────────────
-
-  /// Check payout consent status
-  Future<String> _checkPayoutConsent(String userId) async {
-    try {
-      final response = await _client
-          .from('wallet_consent')
-          .select('status')
-          .eq('student_id', userId)
-          .eq('consent_type', 'payout_approval')
-          .order('created_at', ascending: false)
-          .limit(1)
-          .maybeSingle();
-
-      if (response == null) return 'none';
-      return response['status'] as String;
-    } catch (e) {
-      debugPrint('❌ [FlutterwaveWallet] Error checking consent: $e');
-      return 'error';
-    }
-  }
-
   // ─── Transaction Status & History ───────────────────────────────────
 
-  /// Get transfer status from Flutterwave
-  /// 
-  /// Used to check status of pending transfers.
-  Future<Map<String, dynamic>> getTransferStatus(String transferId) async {
+  /// Sync a stuck processing withdrawal against Flutterwave transfer status.
+  /// Finalizes to paid (with ledger debit) or failed when Flutterwave reports
+  /// a terminal status; otherwise returns still-processing.
+  Future<Map<String, dynamic>> syncWithdrawalStatus({
+    required String withdrawalId,
+  }) async {
     try {
+      debugPrint('🔄 [FlutterwaveWallet] Syncing withdrawal: $withdrawalId');
       final response = await _client.functions.invoke(
-        'flutterwave_get_transfer_status',
-        body: {'transfer_id': transferId},
+        'flutterwave_sync_withdrawal',
+        body: {'withdrawal_id': withdrawalId},
       );
 
-      if (response.status == 200 && response.data is Map) {
-        final data = response.data as Map;
+      if (response.data is Map) {
+        final data = Map<String, dynamic>.from(response.data as Map);
+        if (data['success'] == true) {
+          return {
+            'success': true,
+            'status': data['status'],
+            'transfer_id': data['transfer_id'],
+            'flutterwave_status': data['flutterwave_status'],
+            'message': data['message'],
+            'simulated': data['simulated'] == true,
+            'already_final': data['already_final'] == true,
+          };
+        }
         return {
-          'success': true,
-          'status': data['status'],
-          'data': data['data'],
+          'success': false,
+          'error': data['error']?.toString() ?? 'Sync failed',
         };
       }
 
-      return {'success': false, 'error': 'Failed to fetch status'};
+      return {'success': false, 'error': 'Sync failed'};
+    } on FunctionException catch (e) {
+      final details = e.details;
+      String? message;
+      if (details is Map) {
+        message = details['error']?.toString();
+      }
+      debugPrint('❌ [FlutterwaveWallet] Error syncing withdrawal: $e');
+      return {
+        'success': false,
+        'error': message ?? e.reasonPhrase ?? e.toString(),
+      };
     } catch (e) {
-      debugPrint('❌ [FlutterwaveWallet] Error fetching transfer status: $e');
+      debugPrint('❌ [FlutterwaveWallet] Error syncing withdrawal: $e');
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -307,15 +376,17 @@ class FlutterwaveWalletService {
     }
   }
 
-  /// Cancel a pending withdrawal request
+  /// Cancel a pending withdrawal request.
+  ///
+  /// Uses the secure `cancel_withdrawal_request` RPC (a direct table update
+  /// failed under RLS for the `pending_admin_approval` state the app uses).
   Future<bool> cancelWithdrawalRequest(String withdrawalId) async {
     try {
-      await _client.from('withdrawal_requests').update({
-        'status': 'cancelled',
-        'updated_at': DateTime.now().toIso8601String(),
-      }).eq('id', withdrawalId);
-
-      return true;
+      final result = await _client.rpc('cancel_withdrawal_request', params: {
+        'p_withdrawal_id': withdrawalId,
+      });
+      final map = Map<String, dynamic>.from(result as Map);
+      return map['success'] == true;
     } catch (e) {
       debugPrint('❌ [FlutterwaveWallet] Error cancelling withdrawal: $e');
       return false;

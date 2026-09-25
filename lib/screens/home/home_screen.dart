@@ -4,6 +4,7 @@ import 'dart:collection';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../../services/badge_service.dart' as badge_service;
@@ -11,12 +12,15 @@ import '../../services/badge_service.dart' as badge_service;
 import '../onboarding/goal_onboarding_screen.dart';
 import '../goals/daily_goal_grid_screen.dart';
 import '../../constants/app_constants.dart';
+import '../../theme/app_theme.dart';
 import '../../models/models.dart';
 import '../../providers/providers.dart';
 import '../../widgets/widgets.dart';
+import '../../utils/holiday_utils.dart';
 import '../../widgets/gratitude_slider.dart';
 import '../gratitude/gratitude_jar_screen.dart';
 import '../mini_courses/mini_course_detail_screen.dart';
+import '../mini_courses/mini_courses_screen.dart';
 import '../mini_courses/community_course_detail_screen.dart';
 import '../mini_courses/school_course_viewer_screen.dart';
 import '../../services/community_course_service.dart';
@@ -25,12 +29,21 @@ import '../../models/school_course_model.dart';
 import '../../widgets/advanced_floating_questor_widget.dart';
 import '../../widgets/trial_countdown_banner.dart';
 import '../../widgets/christmas_decorations.dart';
-import '../../services/subscription_service.dart';
 // Removed debug-only services: push notification test and secure goal debug actions
 import '../../services/challenge_evaluator.dart';
 import '../../widgets/goal_completion_dialog.dart';
 import '../goals/goal_history_screen.dart';
 import '../wallet/wallet_dashboard_screen.dart';
+import '../wallet/wallet_activation_screen.dart';
+import '../profile/setup_security_questions_screen.dart';
+import '../library/library_screen.dart';
+import '../library/library_video_player_screen.dart';
+import '../../widgets/library_watch_limit_dialog.dart';
+import '../../widgets/library_thumbnail.dart';
+import '../../utils/level_system.dart';
+import '../../utils/app_tab_navigation.dart';
+import '../../utils/course_visuals.dart';
+import '../../utils/entitlements.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -86,7 +99,9 @@ class _HomeScreenState extends State<HomeScreen>
       _listenForGoalCompletions();
       _listenForChallengeCompletions();
       _listenForExpiredGoals();
-
+      _checkSecurityQuestions();
+      _maybeShowTrialMessaging();
+      _maybeShowLeadWalletOnboarding();
     });
   }
 
@@ -114,6 +129,58 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     final goalProvider = Provider.of<GoalProvider>(context, listen: false);
     await goalProvider.checkExpiredGoals();
+  }
+
+  Future<void> _maybeShowTrialMessaging() async {
+    if (!mounted) return;
+    await Future.delayed(const Duration(milliseconds: 600));
+    if (!mounted) return;
+
+    final user = Provider.of<UserProvider>(context, listen: false).user;
+    if (user == null || Entitlements.hasPaidAccess(user)) return;
+
+    if (Entitlements.canUseMiniCourses(user)) {
+      await TrialWelcomeDialog.show(
+        context,
+        days: Entitlements.miniCourseFreeDays,
+      );
+      return;
+    }
+
+    await TrialExpiredModal.showOnce(context);
+  }
+
+  Future<void> _maybeShowLeadWalletOnboarding() async {
+    if (!mounted) return;
+    // Let other first-run dialogs settle first
+    await Future.delayed(const Duration(milliseconds: 1200));
+    if (!mounted) return;
+
+    final userProvider = Provider.of<UserProvider>(context, listen: false);
+    if (!userProvider.isAuthenticated) return;
+    final user = userProvider.user;
+    if (!Entitlements.hasPaidAccess(user)) return;
+
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return;
+
+    await FeatureAnnouncements.showLeadWalletOnboarding(
+      context,
+      onExplore: () {
+        if (!mounted) return;
+        final user = Provider.of<UserProvider>(context, listen: false).user;
+        if (user != null && user.isWalletActive) {
+          Navigator.pushNamed(context, '/wallet');
+        } else {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const WalletActivationScreen(),
+            ),
+          );
+        }
+      },
+    );
   }
 
   void _ensureDailyCourse() {
@@ -145,6 +212,57 @@ class _HomeScreenState extends State<HomeScreen>
       if (!mounted) return;
       badgeService.showBadgeEarnedDialog(context, badge);
     }
+  }
+
+  // Check if the user needs to set up security questions
+  void _checkSecurityQuestions() {
+    final user = Provider.of<UserProvider>(context, listen: false).user;
+    if (user == null || user.hasSecurityQuestions) return;
+
+    Future.delayed(const Duration(seconds: 2), () async {
+      if (!mounted) return;
+      final userProvider = Provider.of<UserProvider>(context, listen: false);
+      if (userProvider.user?.hasSecurityQuestions ?? false) return;
+
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          backgroundColor: const Color(0xFF16213E),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.security, color: Colors.blueAccent),
+              SizedBox(width: 8),
+              Text('Action Required', style: TextStyle(color: Colors.white)),
+            ],
+          ),
+          content: const Text(
+            'To keep your account secure and make it easy to recover your password if you ever forget it, please set up your security questions now.',
+            style: TextStyle(color: Colors.white70),
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(dialogContext);
+                if (!mounted) return;
+                await Navigator.of(context).push<bool>(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        const SetupSecurityQuestionsScreen(isModal: true),
+                  ),
+                );
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blueAccent,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Set Up Now'),
+            ),
+          ],
+        ),
+      );
+    });
   }
 
   // Listen for goal completions and show celebration dialog
@@ -498,28 +616,32 @@ class _HomeScreenState extends State<HomeScreen>
           appBar: AppBar(
             backgroundColor: AppColors.primary,
             elevation: 0,
+            scrolledUnderElevation: 0,
             toolbarHeight: 72,
             centerTitle: true,
-            title: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(
-                  height: 36,
-                  child: Image.asset(
-                    'assets/images/questor 9.png',
-                    fit: BoxFit.contain,
+            shape: AppTheme.appBarShape(context),
+            title: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    height: 36,
+                    child: Image.asset(
+                      'assets/images/questor 9.png',
+                      fit: BoxFit.contain,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  'My Leadership Quest',
-                  style: AppTextStyles.heading3.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.5,
+                  const SizedBox(width: 10),
+                  Text(
+                    'My Leadership Quest',
+                    style: AppTextStyles.heading3.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
             actions: const [],
           ),
@@ -533,57 +655,76 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  // Removed: _triggerTestNotification debug method
+  Widget _buildGenderPrompt() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              'Show illustrations for',
+              style: AppTextStyles.bodySmall.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          _genderChip('Boy', 'male'),
+          const SizedBox(width: 8),
+          _genderChip('Girl', 'female'),
+        ],
+      ),
+    );
+  }
+
+  Widget _genderChip(String label, String value) {
+    return ActionChip(
+      label: Text(label),
+      onPressed: () {
+        Provider.of<UserProvider>(context, listen: false)
+            .updateUserProfile(gender: value);
+      },
+    );
+  }
+
+  Widget _homeAvatarInitial(UserModel? user) {
+    return Container(
+      decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+      child: Center(
+        child: Text(
+          user?.name.isNotEmpty == true ? user!.name[0].toUpperCase() : 'U',
+          style: AppTextStyles.heading1.copyWith(color: AppColors.primary, fontSize: 26),
+        ),
+      ),
+    );
+  }
 
   // Build the gratitude jar floating action button
   Widget _buildGratitudeJarButton() {
     return Padding(
-      padding: const EdgeInsets.only(
-          bottom: 80.0), // Move button down closer to navigation bar
+      padding: const EdgeInsets.only(bottom: 80.0),
       child: Animate(
         effects: [
-          // Create a true bouncing effect with multiple effects
-          // First bounce up quickly
-          MoveEffect(
-            curve: Curves.easeOut,
-            duration: 300.ms,
-            begin: const Offset(0, 0),
-            end: const Offset(0, -15),
-          ),
-          // Then fall down with a slight overshoot
-          MoveEffect(
-            curve: Curves.elasticIn,
+          FadeEffect(duration: 400.ms),
+          ScaleEffect(
+            begin: const Offset(0.92, 0.92),
+            end: const Offset(1, 1),
             duration: 500.ms,
-            begin: const Offset(0, -15),
-            end: const Offset(0, 2),
-          ),
-          // Finally settle back to original position
-          MoveEffect(
-            curve: Curves.bounceOut,
-            duration: 200.ms,
-            begin: const Offset(0, 2),
-            end: const Offset(0, 0),
-          ),
-          // Add a slight scale effect to enhance the bounce
-          ScaleEffect(
-            curve: Curves.easeInOut,
-            begin: const Offset(1.0, 1.0),
-            end: const Offset(1.1, 0.9),
-            duration: 300.ms,
-          ),
-          ScaleEffect(
-            curve: Curves.elasticOut,
-            begin: const Offset(1.1, 0.9),
-            end: const Offset(1.0, 1.0),
-            duration: 700.ms,
-            delay: 300.ms,
+            curve: Curves.easeOutBack,
           ),
         ],
-        // Repeat the animation with a pause between bounces
-        onPlay: (controller) => controller.repeat(period: 2500.ms),
         child: FloatingActionButton(
           onPressed: () {
-            // Navigate to gratitude jar screen
+            if (!guardPaidAction(
+              context,
+              message: 'Subscribe to use the Gratitude Jar',
+            )) {
+              return;
+            }
             Navigator.push(
               context,
               MaterialPageRoute(
@@ -592,7 +733,7 @@ class _HomeScreenState extends State<HomeScreen>
             );
           },
           heroTag: 'gratitude_fab',
-          backgroundColor: AppColors.accent1,
+          backgroundColor: AppColors.primary,
           child: Padding(
             padding: const EdgeInsets.all(8.0),
             child: Image.asset(
@@ -622,33 +763,48 @@ class _HomeScreenState extends State<HomeScreen>
     // These stats are used in the UI components below
     // Keeping the variables here for clarity and future use
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 25),
-          // Trial countdown banner (shows only in last 3 days)
-          FutureBuilder<Map<String, dynamic>>(
-            future: SubscriptionService().getTrialStatus(user?.id ?? ''),
-            builder: (context, snapshot) {
-              if (snapshot.hasData && snapshot.data!['isOnTrial'] == true) {
-                final daysRemaining = snapshot.data!['daysRemaining'] as int;
-                if (daysRemaining <= 3) {
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    child: TrialCountdownBanner(daysRemaining: daysRemaining),
-                  );
-                }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          physics: const ClampingScrollPhysics(),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minHeight: constraints.maxHeight - 28,
+              maxWidth: 1100,
+            ),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+          const MaintenanceBanner(),
+          // Mini-course preview countdown for free-tier users
+          Builder(
+            builder: (context) {
+              if (user == null || Entitlements.hasPaidAccess(user)) {
+                return const SizedBox.shrink();
               }
-              return const SizedBox.shrink();
+              final daysRemaining = Entitlements.miniCourseDaysRemaining(user);
+              if (daysRemaining > 0) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: TrialCountdownBanner(daysRemaining: daysRemaining),
+                );
+              }
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: FeatureLockCard(
+                  compact: true,
+                  title: 'Mini-courses ended',
+                  description:
+                      'Subscribe to keep mini-courses, plus the library, challenges, LeadWallet, and Victory Wall posts. Goals and Gratitude Jar stay free.',
+                  icon: Icons.lock_clock_rounded,
+                ),
+              );
             },
           ),
           // User profile card with stats
           GestureDetector(
-            onTap: () {
-              Navigator.pushNamed(context, '/profile');
-            },
+            onTap: () => Navigator.pushNamed(context, '/profile'),
             child: Container(
               decoration: NeumorphicStyles.large.copyWith(
                 borderRadius: BorderRadius.circular(20),
@@ -668,8 +824,9 @@ class _HomeScreenState extends State<HomeScreen>
                                 const Color(0xFF2D7A46), // Lighter green
                               ]
                             : [
+                                AppColors.primaryDark,
                                 AppColors.primary,
-                                AppColors.primary.withOpacity(0.92),
+                                AppColors.violetLight,
                               ],
                       ),
                       borderRadius: BorderRadius.circular(20),
@@ -677,7 +834,7 @@ class _HomeScreenState extends State<HomeScreen>
                         color: ChristmasBanner.shouldShow
                             ? const Color(0xFFFFD700)
                                 .withOpacity(0.4) // Gold border
-                            : Colors.white.withOpacity(0.15),
+                            : Colors.white.withOpacity(0.10),
                         width: ChristmasBanner.shouldShow ? 2 : 1,
                       ),
                       boxShadow: [
@@ -685,9 +842,9 @@ class _HomeScreenState extends State<HomeScreen>
                           color: ChristmasBanner.shouldShow
                               ? const Color(0xFFC41E3A)
                                   .withOpacity(0.2) // Christmas red glow
-                              : AppColors.secondary.withOpacity(0.2),
-                          blurRadius: 8,
-                          offset: const Offset(0, 4),
+                              : AppColors.plum.withOpacity(0.25),
+                          blurRadius: 16,
+                          offset: const Offset(0, 6),
                         ),
                       ],
                     ),
@@ -711,8 +868,8 @@ class _HomeScreenState extends State<HomeScreen>
                                           const Color(0xFFFFD700), // Gold
                                         ]
                                       : [
-                                          AppColors.secondary,
-                                          AppColors.tertiary,
+                                          AppColors.secondaryBright,
+                                          AppColors.goldPressed,
                                         ],
                                 ),
                                 boxShadow: [
@@ -720,30 +877,26 @@ class _HomeScreenState extends State<HomeScreen>
                                     color: ChristmasBanner.shouldShow
                                         ? const Color(0xFFFFD700)
                                             .withOpacity(0.4)
-                                        : AppColors.secondary.withOpacity(0.4),
-                                    blurRadius: 12,
-                                    spreadRadius: 2,
+                                        : AppColors.secondary.withOpacity(0.3),
+                                    blurRadius: 10,
+                                    spreadRadius: 1,
                                   ),
                                 ],
                               ),
                               padding: const EdgeInsets.all(3),
-                              child: Container(
-                                decoration: const BoxDecoration(
-                                  color: Colors.white,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: Center(
-                                  child: Text(
-                                    user?.name.isNotEmpty == true
-                                        ? user!.name[0].toUpperCase()
-                                        : 'U',
-                                    style: AppTextStyles.heading1.copyWith(
-                                      color: AppColors.primary,
-                                      fontSize: 26,
-                                    ),
-                                  ),
-                                ),
-                              ),
+                              child: user?.avatarUrl != null &&
+                                      user!.avatarUrl!.isNotEmpty
+                                  ? ClipOval(
+                                      child: Image.network(
+                                        user!.avatarUrl!,
+                                        width: 58,
+                                        height: 58,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) =>
+                                            _homeAvatarInitial(user),
+                                      ),
+                                    )
+                                  : _homeAvatarInitial(user),
                             ),
                             const SizedBox(width: 16),
 
@@ -753,9 +906,11 @@ class _HomeScreenState extends State<HomeScreen>
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    ChristmasBanner.shouldShow
-                                        ? '🎄 Merry Christmas, ${user?.name ?? 'Leader'}!'
+                                    HolidayUtils.getHolidayGreeting() != null
+                                        ? '${HolidayUtils.getHolidayGreeting()}, ${user?.name ?? 'Leader'}!'
                                         : 'Hello, ${user?.name ?? 'Leader'}!',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                     style: AppTextStyles.heading3.copyWith(
                                       color: Colors.white,
                                       fontWeight: FontWeight.bold,
@@ -763,14 +918,32 @@ class _HomeScreenState extends State<HomeScreen>
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    ChristmasBanner.shouldShow
-                                        ? _buildChristmasSubtitle()
-                                        : _buildMotivationalSubtitle(context),
+                                    HolidayUtils.getHolidaySubtitle() ?? _buildMotivationalSubtitle(context),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
                                     style: AppTextStyles.body.copyWith(
                                       color: Colors.white.withOpacity(0.9),
                                     ),
                                   ),
                                   const SizedBox(height: 8),
+                                  // Gamification: Daily Streak & Level Badge
+                                  if (userProvider.user != null)
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 6,
+                                      children: [
+                                        MlqPill(
+                                          label: '${userProvider.user!.currentStreak} Day Streak',
+                                          icon: Icons.local_fire_department,
+                                          background: Colors.white.withOpacity(0.14),
+                                          foreground: Colors.white,
+                                        ),
+                                        MlqPill.gold(
+                                          label: 'Lvl ${LevelSystem.getLevelForXp(userProvider.user!.xp)} · ${LevelSystem.getLevelTitleForXp(userProvider.user!.xp)}',
+                                          icon: Icons.workspace_premium_rounded,
+                                        ),
+                                      ],
+                                    ),
                                 ],
                               ),
                             ),
@@ -791,64 +964,98 @@ class _HomeScreenState extends State<HomeScreen>
                                     MainAxisAlignment.spaceAround,
                                 children: [
                                   _buildStatItemLoading(
-                                      Icons.star, 'XP POINTS', Colors.amber),
+                                      Icons.star, 'XP POINTS', AppColors.secondaryBright),
                                   _buildStatItemLoading(Icons.monetization_on,
-                                      'COINS', Colors.orangeAccent),
+                                      'COINS', AppColors.secondary),
                                   _buildStatItemLoading(Icons.emoji_events,
-                                      'BADGES', Colors.purpleAccent),
+                                      'BADGES', const Color(0xFFE7D3EC)),
                                 ],
                               );
                             }
 
-                            return Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceAround,
+                            return Column(
                               children: [
-                                // XP Points - use direct provider reference for consistent updates
-                                _buildStatItem(
-                                  icon: Icons.star,
-                                  value: '${currentUser.xp}',
-                                  label: 'LIFETIME XP',
-                                  color: Colors.amber,
-                                  isError: false,
-                                  onTap: () {
-                                    // Navigate to leaderboard when XP is tapped
-                                    Navigator.pushNamed(
-                                        context, '/leaderboard');
-                                  },
-                                ),
-                                // Coins - with proper formatting
-                                _buildStatItem(
-                                  icon: Icons.monetization_on,
-                                  value: currentUser.coins >= 1000
-                                      ? '${(currentUser.coins / 1000).toStringAsFixed(1)}K'
-                                      : currentUser.coins.toStringAsFixed(1),
-                                  label: 'COINS',
-                                  color: Colors.orangeAccent,
-                                  isError: false,
-                                  onTap: () {
-                                    // Navigate to coin history when coins are tapped
-                                    Navigator.pushNamed(
-                                        context, '/coin-history');
-                                  },
-                                ),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                                  children: [
+                                    // XP Points - use direct provider reference for consistent updates
+                                    _buildStatItem(
+                                      icon: Icons.star,
+                                      value: '${currentUser.xp}',
+                                      label: 'LIFETIME XP',
+                                      color: AppColors.secondaryBright,
+                                      isError: false,
+                                      onTap: () {
+                                        // Navigate to leaderboard when XP is tapped
+                                        Navigator.pushNamed(context, '/leaderboard');
+                                      },
+                                    ),
+                                    // Coins - with proper formatting
+                                    _buildStatItem(
+                                      icon: Icons.monetization_on,
+                                      value: currentUser.coins >= 1000
+                                          ? '${(currentUser.coins / 1000).toStringAsFixed(1)}K'
+                                          : currentUser.coins.toStringAsFixed(1),
+                                      label: 'COINS',
+                                      color: AppColors.secondary,
+                                      isError: false,
+                                      onTap: () {
+                                        // Navigate to coin history when coins are tapped
+                                        Navigator.pushNamed(context, '/coin-history');
+                                      },
+                                    ),
 
-                                // Badges - get badge count from UserProvider's badges list
-                                _buildStatItem(
-                                  icon: Icons.emoji_events,
-                                  value: '${userProvider.badges.length}',
-                                  label: 'BADGES',
-                                  color: Colors.purpleAccent,
-                                  isError: false,
-                                  onTap: () {
-                                    // Navigate to badges screen when tapped
-                                    Navigator.pushNamed(context, '/profile');
-                                  },
+                                    // Badges - get badge count from UserProvider's badges list
+                                    _buildStatItem(
+                                      icon: Icons.emoji_events,
+                                      value: '${userProvider.badges.length}',
+                                      label: 'BADGES',
+                                      color: const Color(0xFFE7D3EC),
+                                      isError: false,
+                                      onTap: () => Navigator.pushNamed(context, '/profile'),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                                // Visual XP Progress Bar
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            'Progress to Level ${LevelSystem.getLevelForXp(currentUser.xp) + 1}',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          '${currentUser.xp} / ${LevelSystem.getXpForNextLevel(currentUser.xp)} XP',
+                                          maxLines: 1,
+                                          style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: LinearProgressIndicator(
+                                        value: LevelSystem.getProgressToNextLevel(currentUser.xp),
+                                        backgroundColor: Colors.white.withOpacity(0.16),
+                                        valueColor: const AlwaysStoppedAnimation<Color>(AppColors.secondary),
+                                        minHeight: 8,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ],
                             );
-                          },
-                        ),
-                      ],
+                      },
+                    ),
+                    ],
                     ),
                   ),
                   // Christmas decorations overlay
@@ -886,9 +1093,18 @@ class _HomeScreenState extends State<HomeScreen>
                 ],
               ),
             ),
-          ).animate().fadeIn(duration: 600.ms).slideY(begin: 0.3, end: 0),
+          ).animate().fadeIn(duration: 350.ms),
 
-          const SizedBox(height: 24),
+          if (user != null && (user.gender == null || user.gender!.isEmpty)) ...[
+            const SizedBox(height: 12),
+            _buildGenderPrompt(),
+          ],
+
+          const SizedBox(height: 20),
+
+          _buildTodaysQuest(user).animate().fadeIn(duration: 350.ms),
+
+          const SizedBox(height: 20),
 
           // Main goals section with tabs
           Container(
@@ -901,21 +1117,11 @@ class _HomeScreenState extends State<HomeScreen>
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.flag_rounded,
-                            color: AppColors.secondary, // gold flag icon
-                            size: 28,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'My Main Goals',
-                            style: AppTextStyles.sectionHeader.copyWith(
-                              color: AppColors.primary,
-                            ),
-                          ),
-                        ],
+                      const Expanded(
+                        child: MlqSectionHeader(
+                          title: 'My Main Goals',
+                          icon: Icons.flag_rounded,
+                        ),
                       ),
                       // View History button
                       if (allDisplayableGoals.isNotEmpty)
@@ -933,8 +1139,7 @@ class _HomeScreenState extends State<HomeScreen>
                               horizontal: 12,
                               vertical: 6,
                             ),
-                            backgroundColor:
-                                AppColors.secondary.withOpacity(0.1),
+                            backgroundColor: AppColors.primarySoft,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
@@ -942,12 +1147,12 @@ class _HomeScreenState extends State<HomeScreen>
                           icon: Icon(
                             Icons.history,
                             size: 16,
-                            color: AppColors.secondary,
+                            color: AppColors.primary,
                           ),
                           label: Text(
                             'History',
                             style: AppTextStyles.bodySmall.copyWith(
-                              color: AppColors.secondary,
+                              color: AppColors.primary,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -996,208 +1201,464 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           )
               .animate()
-              .fadeIn(duration: 700.ms, delay: 200.ms)
-              .slideY(begin: 0.3, end: 0),
+              .fadeIn(duration: 350.ms),
 
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
 
-          // Weekly progress graph card
-          Container(
+          // Learn next — keep quest flow: Goals → Courses before secondary widgets
+          PaidFeatureGate(
+            title: 'Mini-Courses',
+            description:
+                'Free accounts include mini-courses for 7 days. Subscribe to keep learning.',
+            icon: Icons.school_rounded,
+            compact: true,
+            isAllowed: Entitlements.canUseMiniCourses,
+            child: Container(
             decoration: NeumorphicStyles.large,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.insights_rounded,
-                        color: AppColors.tertiary,
-                        size: 28,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Weekly Progress',
-                        style: AppTextStyles.sectionHeader.copyWith(
-                          color: AppColors.primary,
+                  MlqSectionHeader(
+                    title: 'Continue Learning',
+                    icon: Icons.school_rounded,
+                    trailing: TextButton(
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const MiniCoursesScreen(),
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  const WeeklyProgressGraph(),
-                ],
-              ),
-            ),
-          )
-              .animate()
-              .fadeIn(duration: 800.ms, delay: 400.ms)
-              .slideY(begin: 0.3, end: 0),
-
-          const SizedBox(height: 24),
-
-          // ── LeadWallet card ────────────────────────────────────
-          _buildWalletCard(user)
-              .animate()
-              .fadeIn(duration: 500.ms, delay: 450.ms)
-              .slideY(begin: 0.15, end: 0, curve: Curves.easeOutCubic),
-
-          const SizedBox(height: 24),
-
-          // Gratitude slider
-          const GratitudeSlider(),
-          const SizedBox(height: 24),
-
-          // Mini-courses section card
-          Container(
-            decoration: NeumorphicStyles.large,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.school_rounded,
-                        color: AppColors.social,
-                        size: 28,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Mini-Courses',
-                        style: AppTextStyles.sectionHeader.copyWith(
-                          color: AppColors.primary,
+                      style: TextButton.styleFrom(
+                        backgroundColor: AppColors.primarySoft,
+                        foregroundColor: AppColors.primary,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
                         ),
                       ),
-                    ],
+                      child: const Text(
+                        'See all',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 16),
                   _buildMiniCoursesCarousel(),
                 ],
               ),
             ),
+          ),
+          ).animate().fadeIn(duration: 350.ms),
+
+          const SizedBox(height: 20),
+
+          PaidFeatureGate(
+            title: 'LeadWallet',
+            description:
+                'LeadWallet unlocks with a paid plan. Goals and Gratitude Jar stay free.',
+            icon: Icons.account_balance_wallet_rounded,
+            compact: true,
+            child: _buildWalletCard(user),
+          ),
+          const SizedBox(height: 14),
+
+          _buildRankPreview(userProvider),
+          const SizedBox(height: 20),
+
+          PaidFeatureGate(
+            title: 'Digital Library',
+            description:
+                'Leadership videos unlock with Monthly or Quarterly.',
+            icon: Icons.video_library_rounded,
+            compact: true,
+            child: _buildLibraryPreviewSection(context),
           )
               .animate()
-              .fadeIn(duration: 900.ms, delay: 600.ms)
-              .slideY(begin: 0.3, end: 0),
+              .fadeIn(duration: 350.ms),
+
+          const SizedBox(height: 20),
+
+          const GratitudeSlider(),
+          const SizedBox(height: 20),
+
+          // Secondary: progress insight
+          Container(
+            decoration: NeumorphicStyles.large,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const MlqSectionHeader(
+                    title: 'Weekly Progress',
+                    icon: Icons.insights_rounded,
+                  ),
+                  const SizedBox(height: 16),
+                  const WeeklyProgressGraph(),
+                ],
+              ),
+            ),
+          ).animate().fadeIn(duration: 350.ms),
 
           const SizedBox(height: 48), // Extra space for floating button
 
           // Debug validation panel removed
-        ],
+                ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Picks the single most useful next action (first match wins).
+  Widget _buildTodaysQuest(UserModel? user) {
+    final mini = Provider.of<MiniCourseProvider>(context);
+    final goals = Provider.of<GoalProvider>(context);
+    final challenges = Provider.of<ChallengeProvider>(context);
+    final gratitude = Provider.of<GratitudeProvider>(context);
+
+    void openCourse(MiniCourseModel c) => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => MiniCourseDetailScreen(courseId: c.id),
+          ),
+        );
+
+    if (Entitlements.canUseMiniCourses(user)) {
+      final open = mini.todayCourses
+          .where((c) =>
+              c.status != MiniCourseStatus.completed && !c.quiz.isCompleted)
+          .toList();
+      final inProgress =
+          open.where((c) => c.status == MiniCourseStatus.inProgress);
+      final course = inProgress.isNotEmpty
+          ? inProgress.first
+          : (open.isNotEmpty ? open.first : null);
+      if (course != null) {
+        final started = course.status == MiniCourseStatus.inProgress;
+        final total = course.lessons.length;
+        final lessonNo = (course.currentLessonIndex + 1).clamp(1, total == 0 ? 1 : total);
+        return MlqQuestCard(
+          title: course.title,
+          subtitle: started
+              ? 'Lesson $lessonNo of $total · ${course.topic}'
+              : '$total short lessons · ${course.topic}',
+          actionLabel: started ? 'Continue' : 'Start lesson',
+          icon: Icons.menu_book_rounded,
+          coverAsset:
+              MlqCourseVisuals.courseCover(
+                course.id,
+                course.topic,
+                course.title,
+                gender: user?.gender,
+              ),
+          onAction: () => openCourse(course),
+        );
+      }
+    }
+
+    final pendingGoals = goals.todayGoals.where((g) => !g.isCompleted).length;
+    if (pendingGoals > 0) {
+      return MlqQuestCard(
+        title: 'Check in on your goals',
+        subtitle: pendingGoals == 1
+            ? '1 daily goal left for today'
+            : '$pendingGoals daily goals left for today',
+        actionLabel: 'Check in',
+        icon: Icons.flag_rounded,
+        coverAsset: MlqCourseVisuals.coverFor('goal', gender: user?.gender),
+        onAction: () => AppTabNavigation.goToTab(1),
+      );
+    }
+
+    final now = DateTime.now();
+    final endingSoon = challenges.activeParticipatingChallenges
+        .where((c) =>
+            c.endDate.isAfter(now) &&
+            c.endDate.difference(now) <= const Duration(hours: 48))
+        .toList()
+      ..sort((a, b) => a.endDate.compareTo(b.endDate));
+    if (endingSoon.isNotEmpty) {
+      final c = endingSoon.first;
+      final hours = c.endDate.difference(now).inHours;
+      return MlqQuestCard(
+        title: c.title,
+        subtitle: hours < 24
+            ? 'Ends in $hours h — finish strong'
+            : 'Ends tomorrow — finish strong',
+        actionLabel: 'View challenge',
+        icon: Icons.emoji_events_rounded,
+        coverAsset:
+            MlqCourseVisuals.coverFor('resilience', gender: user?.gender),
+        onAction: () => AppTabNavigation.goToTab(2),
+      );
+    }
+
+    final wroteToday = gratitude.entries.any((e) =>
+        e.date.year == now.year &&
+        e.date.month == now.month &&
+        e.date.day == now.day);
+    if (!wroteToday) {
+      return MlqQuestCard(
+        title: 'Add to your Gratitude Jar',
+        subtitle: 'One thing that went well today',
+        actionLabel: 'Write one',
+        icon: Icons.favorite_rounded,
+        coverAsset: MlqCourseVisuals.coverFor('gratitude'),
+        onAction: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const GratitudeJarScreen()),
+        ),
+      );
+    }
+
+    return const MlqQuestCard(
+      eyebrow: 'QUEST COMPLETE',
+      title: "You're all done for today",
+      subtitle: 'Come back tomorrow for a new quest.',
+      actionLabel: '',
+      onAction: null,
+      icon: Icons.check_circle_rounded,
+    );
+  }
+
+  Widget _buildRankPreview(UserProvider userProvider) {
+    final me = userProvider.user;
+    if (me == null) return const SizedBox.shrink();
+    final board = userProvider.leaderboardUsers;
+    final idx = board.indexWhere((u) => u.id == me.id);
+    final title = idx >= 0 ? '#${idx + 1} this month' : 'Monthly leaderboard';
+    final subtitle = idx >= 0
+        ? '${me.monthlyXp} XP earned this month'
+        : 'See where you rank with other leaders';
+
+    return Material(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(AppSizes.radiusL),
+      child: InkWell(
+        onTap: () => AppTabNavigation.goToTab(4),
+        borderRadius: BorderRadius.circular(AppSizes.radiusL),
+        child: Ink(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppSizes.radiusL),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppColors.secondary.withOpacity(0.25),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.leaderboard_rounded,
+                    color: AppColors.goldText),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: AppTextStyles.bodyBold
+                            .copyWith(color: AppColors.textPrimary)),
+                    const SizedBox(height: 2),
+                    Text(subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyles.caption
+                            .copyWith(color: AppColors.textSecondary)),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded,
+                  color: AppColors.primary),
+            ],
+          ),
+        ),
       ),
     );
   }
 
   Widget _buildEmptyGoalsMessage() {
+    return const MlqEmptyState(
+      title: 'No Main Goals Yet',
+      message: 'Set your first main goal to start your leadership journey!',
+      icon: Icons.flag_outlined,
+    );
+  }
+
+  Widget _buildLibraryPreviewSection(BuildContext context) {
+    final lib = context.watch<LibraryProvider>();
+    final uid = context.read<UserProvider>().user?.id;
+
+    // Lazy-load library catalog when home is shown.
+    if (lib.status == LibraryStatus.initial) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        context.read<LibraryProvider>().loadIfStale(userId: uid);
+      });
+    }
+
+    final preview = lib.previewVideos;
+
     return Container(
-      padding: const EdgeInsets.all(24),
-      margin: const EdgeInsets.symmetric(vertical: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            spreadRadius: 1,
-          ),
-        ],
+      decoration: NeumorphicStyles.large,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            MlqSectionHeader(
+              title: 'Digital Library',
+              icon: Icons.video_library_rounded,
+              trailing: TextButton(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const LibraryScreen()),
+                  );
+                },
+                child: const Text('See all'),
+              ),
+            ),
+            if (lib.status == LibraryStatus.loading && preview.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: MlqLoadingState(message: 'Loading videos…'),
+              )
+            else if (preview.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Text(
+                  'Educational videos are being curated. Check back soon!',
+                  style: AppTextStyles.body.copyWith(color: AppColors.textSecondary),
+                ),
+              )
+            else ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 168,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: preview.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 12),
+                  itemBuilder: (_, i) {
+                    final v = preview[i];
+                    return GestureDetector(
+                      onTap: () async {
+                        final lib = context.read<LibraryProvider>();
+                        if (uid != null) {
+                          final status =
+                              await lib.tryStartWatch(uid, v.youtubeId);
+                          if (!status.allowed && context.mounted) {
+                            await showLibraryWatchLimitDialog(context, status);
+                            return;
+                          }
+                        }
+                        if (!context.mounted) return;
+                        lib.trackView(v.id);
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => LibraryVideoPlayerScreen(
+                              video: v,
+                              userId: uid,
+                              ytVideoId: v.youtubeId,
+                              watchAlreadyRecorded: true,
+                            ),
+                          ),
+                        );
+                      },
+                      child: SizedBox(
+                        width: 200,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: SizedBox(
+                                width: 200,
+                                height: 96,
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    LibraryThumbnail(video: v, fit: BoxFit.cover),
+                                    Center(
+                                      child: Container(
+                                        width: 36,
+                                        height: 36,
+                                        decoration: BoxDecoration(
+                                          color: Colors.black.withOpacity(0.35),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const Icon(Icons.play_arrow_rounded,
+                                            color: Colors.white),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            ClipRect(
+                              child: SizedBox(
+                                height: 52,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(
+                                      height: 34,
+                                      child: Text(
+                                        v.title,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: AppTextStyles.caption.copyWith(
+                                          fontWeight: FontWeight.w700,
+                                          height: 1.2,
+                                        ),
+                                      ),
+                                    ),
+                                    SizedBox(
+                                      height: 16,
+                                      child: Text(
+                                        v.channelName,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: AppTextStyles.caption.copyWith(
+                                          color: AppColors.textSecondary,
+                                          height: 1.2,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          // Show icon for empty state
-          const Icon(
-            Icons.flag_outlined,
-            size: 100,
-            color: AppColors.textSecondary,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'No Main Goals Yet',
-            style:
-                AppTextStyles.heading3.copyWith(color: AppColors.textSecondary),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Set your first main goal to start your leadership journey!',
-            style: AppTextStyles.body,
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
-    ).animate().fadeIn(duration: 500.ms).slideY(begin: 0.1, end: 0);
+    );
   }
 
   Widget _buildMiniCoursesCarousel() {
     final miniCourseProvider = Provider.of<MiniCourseProvider>(context);
     final state = miniCourseProvider.dailyState;
     final todayCourses = miniCourseProvider.todayCourses;
-    final communityCourses = miniCourseProvider.communityCourses;
-
-    // Get the color and icon based on the course topic
-    Color getCourseColor(String topic) {
-      // Leadership topics with varied colors
-      if (topic.contains('Leadership'))
-        return const Color(0xFF6A1B9A); // Deep Purple
-      if (topic.contains('Personal Growth'))
-        return const Color(0xFF00897B); // Teal
-      if (topic.contains('Confidence'))
-        return const Color(0xFFE65100); // Deep Orange
-      if (topic.contains('Communication'))
-        return const Color(0xFF1565C0); // Blue
-      if (topic.contains('Motivation')) return const Color(0xFFC62828); // Red
-      if (topic.contains('Emotional Intelligence'))
-        return const Color(0xFFAD1457); // Pink
-      if (topic.contains('Self-Discipline'))
-        return const Color(0xFF4527A0); // Deep Purple
-      if (topic.contains('Mindset')) return const Color(0xFF00695C); // Teal
-      if (topic.contains('Productivity'))
-        return const Color(0xFFEF6C00); // Orange
-      if (topic.contains('Creativity')) return const Color(0xFFD81B60); // Pink
-      if (topic.contains('Goal Setting'))
-        return const Color(0xFF283593); // Indigo
-      if (topic.contains('Decision Making'))
-        return const Color(0xFF2E7D32); // Green
-      if (topic.contains('Resilience'))
-        return const Color(0xFF6A1B9A); // Purple
-      if (topic.contains('Problem Solving'))
-        return const Color(0xFF0277BD); // Light Blue
-      if (topic.contains('Influence')) return const Color(0xFF5D4037); // Brown
-      if (topic.contains('Time Management'))
-        return const Color(0xFF00838F); // Cyan
-      if (topic.contains('Conflict Resolution'))
-        return const Color(0xFF7B1FA2); // Purple
-      if (topic.contains('Teamwork')) return const Color(0xFF00695C); // Teal
-      return AppColors.primary; // Default
-    }
-
-    IconData getCourseIcon(String topic) {
-      // Leadership topic icons
-      if (topic.contains('Leadership')) return Icons.people;
-      if (topic.contains('Personal Growth')) return Icons.trending_up;
-      if (topic.contains('Confidence')) return Icons.stars;
-      if (topic.contains('Communication')) return Icons.chat_bubble;
-      if (topic.contains('Motivation')) return Icons.bolt;
-      if (topic.contains('Emotional Intelligence')) return Icons.favorite;
-      if (topic.contains('Self-Discipline')) return Icons.self_improvement;
-      if (topic.contains('Mindset')) return Icons.psychology;
-      if (topic.contains('Productivity')) return Icons.speed;
-      if (topic.contains('Creativity')) return Icons.brush;
-      if (topic.contains('Goal Setting')) return Icons.flag;
-      if (topic.contains('Decision Making')) return Icons.how_to_vote;
-      if (topic.contains('Resilience')) return Icons.shield;
-      if (topic.contains('Problem Solving')) return Icons.lightbulb;
-      if (topic.contains('Influence')) return Icons.campaign;
-      if (topic.contains('Time Management')) return Icons.schedule;
-      if (topic.contains('Conflict Resolution')) return Icons.handshake;
-      if (topic.contains('Teamwork')) return Icons.group_work;
-      return Icons.school; // Default
-    }
 
     // Show loading state
     if (state == DailyCourseState.fetchingServer ||
@@ -1225,9 +1686,61 @@ class _HomeScreenState extends State<HomeScreen>
     if (state == DailyCourseState.error) {
       final errorMessage =
           miniCourseProvider.lastError ?? 'Failed to load courses';
-      final isNetworkError = errorMessage.toLowerCase().contains('internet') ||
-          errorMessage.toLowerCase().contains('network') ||
-          errorMessage.toLowerCase().contains('connection');
+      final isMaintenance = miniCourseProvider.isMaintenance;
+      final isNetworkError = !isMaintenance &&
+          (errorMessage.toLowerCase().contains('internet') ||
+              errorMessage.toLowerCase().contains('network') ||
+              errorMessage.toLowerCase().contains('connection'));
+
+      if (isMaintenance) {
+        // Dedicated maintenance card – no retry button since the issue is server-side
+        return SizedBox(
+          height: 220,
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF8E1),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFFFFE082)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.construction_rounded,
+                        size: 36, color: Color(0xFFF9A825)),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Mini-Courses Under Maintenance',
+                            style: AppTextStyles.bodyBold.copyWith(
+                              color: const Color(0xFF7B5800),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            errorMessage,
+                            style: AppTextStyles.caption.copyWith(
+                              color: const Color(0xFF9A6F00),
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      }
 
       return SizedBox(
         height: 220,
@@ -1294,166 +1807,177 @@ class _HomeScreenState extends State<HomeScreen>
         ? schoolProvider.publishedCourses
         : <SchoolCourse>[];
 
-    // Calculate total items: school courses + community courses + global courses
-    final totalItems =
-        schoolCourses.length + communityCourses.length + todayCourses.length;
+    final totalItems = schoolCourses.length + todayCourses.length;
+    final desktop = MediaQuery.sizeOf(context).width >= 900;
 
-    // Show courses carousel
+    Widget itemAt(int index) {
+      if (index < schoolCourses.length) {
+        return _buildSchoolCourseCard(
+            schoolCourses[index], index, schoolProvider);
+      }
+      return _buildCourseCoverCard(
+          todayCourses[index - schoolCourses.length],
+          index - schoolCourses.length);
+    }
+
+    if (desktop && totalItems <= 3) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var i = 0; i < totalItems; i++) ...[
+            if (i > 0) const SizedBox(width: 16),
+            Expanded(child: itemAt(i)),
+          ],
+        ],
+      );
+    }
+
     return SizedBox(
-      height: 220,
+      height: desktop ? 300 : 280,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         itemCount: totalItems,
-        itemBuilder: (context, index) {
-          // First show school courses (branded with school logo)
-          if (index < schoolCourses.length) {
-            return _buildSchoolCourseCard(
-                schoolCourses[index], index, schoolProvider);
-          }
-
-          // Then show community courses (branded)
-          final communityIndex = index - schoolCourses.length;
-          if (communityIndex < communityCourses.length) {
-            return _buildCommunityCourseCard(
-                communityCourses[communityIndex], communityIndex);
-          }
-
-          // Global course
-          final globalIndex =
-              index - schoolCourses.length - communityCourses.length;
-          final course = todayCourses[globalIndex];
-          final courseColor = getCourseColor(course.topic);
-          final courseIcon = getCourseIcon(course.topic);
-
-          return GestureDetector(
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => MiniCourseDetailScreen(courseId: course.id),
-                ),
-              );
-            },
-            child: Container(
-              width: 220,
-              margin: const EdgeInsets.only(right: 16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.08),
-                    blurRadius: 12,
-                    spreadRadius: 2,
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Course header with gradient
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          courseColor,
-                          courseColor.withOpacity(0.8),
-                        ],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(16),
-                        topRight: Radius.circular(16),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Icon(
-                            courseIcon,
-                            color: Colors.white,
-                            size: 24,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            course.topic,
-                            style: AppTextStyles.bodyBold.copyWith(
-                              color: Colors.white,
-                              fontSize: 15,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  // Course content
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                course.title,
-                                style: AppTextStyles.bodyBold.copyWith(
-                                  fontSize: 14,
-                                ),
-                                maxLines: 3,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ),
-                          QuestButton(
-                            text: (course.status == MiniCourseStatus.completed)
-                                ? 'Completed ✓'
-                                : 'Start Course',
-                            type: (course.status == MiniCourseStatus.completed)
-                                ? QuestButtonType.secondary
-                                : QuestButtonType.primary,
-                            height: 44,
-                            onPressed: (course.status ==
-                                    MiniCourseStatus.completed)
-                                ? null // Disable button if completed
-                                : () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => MiniCourseDetailScreen(
-                                            courseId: course.id),
-                                      ),
-                                    );
-                                  },
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          )
-              .animate()
-              .fadeIn(duration: 500.ms, delay: (index * 100).ms)
-              .slideX(begin: 0.2, end: 0);
-        },
+        itemBuilder: (context, index) => itemAt(index),
       ),
     );
+  }
+
+  Widget _buildCourseCoverCard(MiniCourseModel course, int index) {
+    final done = course.status == MiniCourseStatus.completed ||
+        course.quiz.isCompleted;
+    final inProgress = !done && course.status == MiniCourseStatus.inProgress;
+    final gender = Provider.of<UserProvider>(context, listen: false).user?.gender;
+    final cover = MlqCourseVisuals.courseCover(
+      course.id,
+      course.topic,
+      course.title,
+      gender: gender,
+    );
+
+    void open() {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => MiniCourseDetailScreen(courseId: course.id),
+        ),
+      );
+    }
+
+    final desktop = MediaQuery.sizeOf(context).width >= 900;
+    return Container(
+      width: desktop ? null : 220,
+      margin: EdgeInsets.only(right: desktop ? 0 : 14, bottom: 4),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppSizes.radiusL),
+        border: Border.all(color: AppColors.border),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.plum.withValues(alpha: 0.06),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: done ? null : open,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AspectRatio(
+                aspectRatio: 16 / 10,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    MlqCoverImage(
+                      asset: cover,
+                      fallbackIcon: MlqCourseVisuals.iconFor(course.topic),
+                    ),
+                    if (done)
+                      Positioned(
+                        top: 10,
+                        right: 10,
+                        child: MlqPill(
+                          label: 'Done',
+                          icon: Icons.check_rounded,
+                          background: AppColors.success,
+                          foreground: Colors.white,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        course.topic.toUpperCase(),
+                        maxLines: 1,
+                        overflow: TextOverflow.clip,
+                        softWrap: false,
+                        style: AppTextStyles.caption.copyWith(
+                          color: AppColors.goldText,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 11,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        course.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyles.bodyBold.copyWith(
+                          fontSize: 14,
+                          height: 1.25,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Icon(
+                            done
+                                ? Icons.check_circle_rounded
+                                : Icons.play_circle_fill_rounded,
+                            size: 18,
+                            color: done ? AppColors.success : AppColors.primary,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              done
+                                  ? 'Completed'
+                                  : inProgress
+                                      ? 'Continue'
+                                      : 'Start · ${course.lessons.length} lessons',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTextStyles.bodySmall.copyWith(
+                                color:
+                                    done ? AppColors.success : AppColors.primary,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    )
+        .animate()
+        .fadeIn(duration: 400.ms, delay: (index * 80).ms)
+        .slideX(begin: 0.15, end: 0);
   }
 
   /// Build a branded community course card with distinct styling
@@ -1868,43 +2392,7 @@ class _HomeScreenState extends State<HomeScreen>
     return 'A short activity now can close your day strong.';
   }
 
-  String _buildChristmasSubtitle() {
-    final now = DateTime.now();
-    final christmas = DateTime(now.year, 12, 25);
-    final newYear = DateTime(now.year + (now.month == 12 ? 1 : 0), 1, 1);
 
-    // Christmas Day
-    if (now.month == 12 && now.day == 25) {
-      return '🎁 Merry Christmas! Enjoy this special day!';
-    }
-
-    // New Year's Day
-    if (now.month == 1 && now.day == 1) {
-      return '🎆 Happy New Year! A fresh start awaits!';
-    }
-
-    // Days until Christmas (before Dec 25)
-    if (now.month == 12 && now.day < 25) {
-      final daysUntil = christmas.difference(now).inDays;
-      if (daysUntil == 1) {
-        return '🎅 Christmas Eve! The magic is almost here!';
-      }
-      return '🎄 $daysUntil days until Christmas! Keep spreading joy!';
-    }
-
-    // After Christmas, before New Year
-    if (now.month == 12 && now.day > 25) {
-      final daysUntil = newYear.difference(now).inDays;
-      return '✨ $daysUntil days until the New Year! Finish strong!';
-    }
-
-    // January (New Year period)
-    if (now.month == 1 && now.day <= 12) {
-      return '🌟 New year, new goals! Make this year amazing!';
-    }
-
-    return 'Wishing you a wonderful holiday season! 🎄';
-  }
 
   // Christmas decoration widgets
   Widget _buildHollyDecoration() {
@@ -2212,16 +2700,13 @@ class _HomeScreenState extends State<HomeScreen>
 
                     goalProvider.addMainGoal(newGoal);
 
-                    // Add coins for setting a goal (0.5 coins)
-                    userProvider.addCoins(0.5);
-
                     Navigator.pop(context);
 
                     // Show success message
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text(
-                          'Main goal added! (+0.5 coins)',
+                          'Main goal added!',
                           style:
                               AppTextStyles.body.copyWith(color: Colors.white),
                         ),
@@ -2487,10 +2972,29 @@ class _HomeScreenState extends State<HomeScreen>
     final userProvider = Provider.of<UserProvider>(context, listen: false);
 
     if (goalProvider.activeGoalsCount >= 3) {
+      final completedOrExpired = goalProvider.completedGoals.length +
+          goalProvider.expiredGoals.length;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'You already have 3 active main goals.',
+            completedOrExpired > 0
+                ? 'You already have 3 active main goals (1 per category). Archive a completed or expired goal first.'
+                : 'You already have 3 active main goals (1 per category).',
+            style: AppTextStyles.body.copyWith(color: Colors.white),
+          ),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    final categoryTaken = goalProvider.activeMainGoalsForDailyGoals
+        .any((g) => g.category == category);
+    if (categoryTaken) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'You already have an active ${_categoryDisplayName(category).toLowerCase()} goal. Archive it after it expires or is completed before creating another.',
             style: AppTextStyles.body.copyWith(color: Colors.white),
           ),
           backgroundColor: AppColors.error,
@@ -2642,7 +3146,6 @@ class _HomeScreenState extends State<HomeScreen>
 
                           try {
                             await goalProvider.addMainGoal(newGoal);
-                            await userProvider.addCoins(0.5);
                             if (dialogContext.mounted) {
                               Navigator.of(dialogContext).pop();
                             }
@@ -2712,9 +3215,10 @@ class _HomeScreenState extends State<HomeScreen>
         .where((goal) => goal.category == GoalCategory.health)
         .toList();
 
+    final desktop = MediaQuery.sizeOf(context).width >= 900;
     return Column(
       children: [
-        // Tab Bar
+        if (!desktop)
         Container(
           decoration: BoxDecoration(
             color: AppColors.surface,
@@ -2828,171 +3332,278 @@ class _HomeScreenState extends State<HomeScreen>
           ),
         ),
         const SizedBox(height: 16),
-
-        // Tab content
-        SizedBox(
-          height: 330, // Increased height to accommodate all content
-          child: TabBarView(
-            controller: _goalTabController,
-            physics:
-                const AlwaysScrollableScrollPhysics(), // Make TabBarView scrollable
+        if (MediaQuery.sizeOf(context).width >= 900)
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Academic goals tab
-              academicGoals.isEmpty
-                  ? Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              'No academic goals yet. Add one to get started!',
-                              style: AppTextStyles.body
-                                  .copyWith(color: AppColors.textSecondary),
-                              textAlign: TextAlign.center,
-                            ),
-                            const SizedBox(height: 12),
-                            QuestButton(
-                              text: 'Add Academic Main Goal',
-                              icon: Icons.add,
-                              type: QuestButtonType.primary,
-                              onPressed: () => _showCreateMainGoalDialog(
-                                  GoalCategory.academic),
-                            ),
-                          ],
-                        ),
-                      ),
-                    )
-                  : SingleChildScrollView(
-                      physics:
-                          const ClampingScrollPhysics(), // Allow scrolling to propagate to parent
-                      child: Column(
-                        children: academicGoals
-                            .map((goal) => GoalCard(
-                                  goal: goal,
-                                  onTap: () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (context) =>
-                                            DailyGoalGridScreen(
-                                          mainGoal: goal,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  onEdit: () {
-                                    // Show edit goal dialog
-                                  },
-                                ))
-                            .toList(),
-                      ),
-                    ),
+              Expanded(
+                child: _homeGoalPane(
+                  goals: academicGoals,
+                  category: GoalCategory.academic,
+                  emptyLabel: 'No academic goal yet',
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _homeGoalPane(
+                  goals: socialGoals,
+                  category: GoalCategory.social,
+                  emptyLabel: 'No social goal yet',
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _homeGoalPane(
+                  goals: healthGoals,
+                  category: GoalCategory.health,
+                  emptyLabel: 'No health goal yet',
+                ),
+              ),
+            ],
+          )
+        else
+          AnimatedBuilder(
+            animation: _goalTabController,
+            builder: (context, _) {
+              final i = _goalTabController.index;
+              return _homeGoalPane(
+                goals: i == 0
+                    ? academicGoals
+                    : i == 1
+                        ? socialGoals
+                        : healthGoals,
+                category: i == 0
+                    ? GoalCategory.academic
+                    : i == 1
+                        ? GoalCategory.social
+                        : GoalCategory.health,
+                emptyLabel: i == 0
+                    ? 'No academic goals yet. Add one to get started!'
+                    : i == 1
+                        ? 'No social goals yet. Add one to get started!'
+                        : 'No health goals yet. Add one to get started!',
+              );
+            },
+          ),
+      ],
+    );
+  }
 
-              // Social goals tab
-              socialGoals.isEmpty
-                  ? Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              'No social goals yet. Add one to get started!',
-                              style: AppTextStyles.body
-                                  .copyWith(color: AppColors.textSecondary),
-                              textAlign: TextAlign.center,
-                            ),
-                            const SizedBox(height: 12),
-                            QuestButton(
-                              text: 'Add Social Main Goal',
-                              icon: Icons.add,
-                              type: QuestButtonType.primary,
-                              onPressed: () => _showCreateMainGoalDialog(
-                                  GoalCategory.social),
-                            ),
-                          ],
-                        ),
+  Widget _homeGoalPane({
+    required List<MainGoalModel> goals,
+    required GoalCategory category,
+    required String emptyLabel,
+  }) {
+    if (goals.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          children: [
+            Text(
+              emptyLabel,
+              style: AppTextStyles.body
+                  .copyWith(color: AppColors.textSecondary),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 10),
+            QuestButton(
+              text: 'Add ${_categoryDisplayName(category)} goal',
+              icon: Icons.add,
+              type: QuestButtonType.primary,
+              onPressed: () => _showCreateMainGoalDialog(category),
+            ),
+          ],
+        ),
+      );
+    }
+    final desktop = MediaQuery.sizeOf(context).width >= 900;
+    return Column(
+      children: [
+        for (final goal in goals)
+          desktop
+              ? _homeGoalVisualCard(goal)
+              : GoalCard(
+                  goal: goal,
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            DailyGoalGridScreen(mainGoal: goal),
                       ),
-                    )
-                  : SingleChildScrollView(
-                      physics:
-                          const ClampingScrollPhysics(), // Allow scrolling to propagate to parent
-                      child: Column(
-                        children: socialGoals
-                            .map((goal) => GoalCard(
-                                  goal: goal,
-                                  onTap: () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (context) =>
-                                            DailyGoalGridScreen(
-                                          mainGoal: goal,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  onEdit: () {
-                                    // Show edit goal dialog
-                                  },
-                                ))
-                            .toList(),
-                      ),
-                    ),
+                    );
+                  },
+                ),
+      ],
+    );
+  }
 
-              // Health goals tab
-              healthGoals.isEmpty
-                  ? Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              'No health goals yet. Add one to get started!',
-                              style: AppTextStyles.body
-                                  .copyWith(color: AppColors.textSecondary),
-                              textAlign: TextAlign.center,
-                            ),
-                            const SizedBox(height: 12),
-                            QuestButton(
-                              text: 'Add Health Main Goal',
-                              icon: Icons.add,
-                              type: QuestButtonType.primary,
-                              onPressed: () => _showCreateMainGoalDialog(
-                                  GoalCategory.health),
-                            ),
-                          ],
+  Widget _homeGoalVisualCard(MainGoalModel goal) {
+    final gender = Provider.of<UserProvider>(context, listen: false).user?.gender;
+    final cover = MlqCourseVisuals.goalCoverFor(
+      goal.category.name,
+      seed: goal.id,
+      gender: gender,
+    );
+    final color = switch (goal.category) {
+      GoalCategory.academic => AppColors.academic,
+      GoalCategory.social => AppColors.social,
+      GoalCategory.health => AppColors.health,
+    };
+    final onHeader = goal.category == GoalCategory.health
+        ? Colors.black
+        : Colors.white;
+    final progress = goal.progressPercentage.clamp(0.0, 1.0);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(20),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => DailyGoalGridScreen(mainGoal: goal),
+              ),
+            );
+          },
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              AspectRatio(
+                aspectRatio: 16 / 10,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    MlqCoverImage(
+                      asset: cover,
+                      fallbackIcon: switch (goal.category) {
+                        GoalCategory.academic => Icons.school_rounded,
+                        GoalCategory.social => Icons.people_rounded,
+                        GoalCategory.health => Icons.favorite_rounded,
+                      },
+                    ),
+                    Positioned(
+                      left: 12,
+                      top: 12,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: color,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          goal.categoryName,
+                          style: AppTextStyles.caption.copyWith(
+                            color: onHeader,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                       ),
-                    )
-                  : SingleChildScrollView(
-                      physics:
-                          const ClampingScrollPhysics(), // Allow scrolling to propagate to parent
-                      child: Column(
-                        children: healthGoals
-                            .map((goal) => GoalCard(
-                                  goal: goal,
-                                  onTap: () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (context) =>
-                                            DailyGoalGridScreen(
-                                          mainGoal: goal,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  onEdit: () {
-                                    // Show edit goal dialog
-                                  },
-                                ))
-                            .toList(),
+                    ),
+                    Positioned(
+                      right: 12,
+                      top: 12,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.45),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          goal.timelineText,
+                          style: AppTextStyles.caption.copyWith(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ),
                     ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      goal.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.clip,
+                      style: AppTextStyles.heading3.copyWith(height: 1.2),
+                    ),
+                    if (goal.description != null &&
+                        goal.description!.trim().isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        goal.description!,
+                        maxLines: 2,
+                        overflow: TextOverflow.clip,
+                        style: AppTextStyles.bodySmall,
+                      ),
+                    ],
+                    const SizedBox(height: 10),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(999),
+                      child: LinearProgressIndicator(
+                        value: progress,
+                        minHeight: 8,
+                        backgroundColor: color.withValues(alpha: 0.15),
+                        color: color,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '${goal.currentXp}/${goal.totalXpRequired} XP',
+                            style: AppTextStyles.caption.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '${(progress * 100).round()}%',
+                          style: AppTextStyles.caption.copyWith(
+                            color: color,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${goal.formattedStartDate} – ${goal.formattedEndDate}',
+                      style: AppTextStyles.caption,
+                    ),
+                    if (goal.isExpired || goal.isCompleted) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        goal.isCompleted ? 'Completed' : 'Expired',
+                        style: AppTextStyles.caption.copyWith(
+                          color: goal.isCompleted
+                              ? AppColors.tertiary
+                              : AppColors.error,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
             ],
           ),
         ),
-      ],
+      ),
     );
   }
 
@@ -3002,130 +3613,120 @@ class _HomeScreenState extends State<HomeScreen>
   Widget _buildWalletCard(UserModel? user) {
     if (user == null) return const SizedBox.shrink();
 
-    // Use current wallet balance or default to 0 if not fetched yet
-    final balanceStr = NumberFormat('#,##0.00', 'en_NG').format(user.walletBalance);
+    final isActive = user.isWalletActive;
+    final isPending = user.isWalletPendingConsent;
+    final balance = user.walletBalance;
+    final nairaFormat = NumberFormat('#,##0.00', 'en_NG');
+
+    void openWallet() {
+      if (isActive) {
+        Navigator.pushNamed(context, '/wallet');
+      } else {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const WalletActivationScreen()),
+        );
+      }
+    }
 
     return GestureDetector(
-      onTap: () => Navigator.pushNamed(context, '/wallet'),
+      onTap: openWallet,
       child: Container(
-        decoration: NeumorphicStyles.large.copyWith(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [AppColors.walletBg, AppColors.primaryDark, AppColors.walletBgMid],
+          ),
           borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: AppColors.primary.withOpacity(0.35)),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.primary.withOpacity(0.22),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+            ),
+          ],
         ),
-        child: Stack(
+        child: Row(
           children: [
             Container(
-              padding: const EdgeInsets.all(16),
+              width: 52,
+              height: 52,
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xFF0D0820),
-                    Color(0xFF1A1A2E), // very dark purple/blue
-                  ],
+                  colors: [AppColors.walletGold, AppColors.accent2],
                 ),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: const Color(0xFFFFD700).withOpacity(0.3),
-                  width: 1,
-                ),
+                borderRadius: BorderRadius.circular(14),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFFFFD700).withOpacity(0.15),
-                    blurRadius: 10,
+                    color: AppColors.walletGold.withOpacity(0.35),
+                    blurRadius: 12,
                     offset: const Offset(0, 4),
                   ),
                 ],
               ),
-              child: Row(
+              child: const Icon(
+                Icons.account_balance_wallet_rounded,
+                color: Colors.white,
+                size: 26,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Wallet Icon
-                  Container(
-                    width: 50,
-                    height: 50,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFFFFD700), Color(0xFFFF9500)],
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFFFFD700).withOpacity(0.4),
-                          blurRadius: 12,
-                          spreadRadius: 2,
-                        ),
-                      ],
-                    ),
-                    child: const Icon(
-                      Icons.account_balance_wallet_rounded,
+                  Text(
+                    'LeadWallet',
+                    style: AppTextStyles.bodyBold.copyWith(
                       color: Colors.white,
-                      size: 26,
+                      fontSize: 16,
                     ),
                   ),
-                  const SizedBox(width: 16),
-                  
-                  // Balance
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'LeadWallet Balance',
-                          style: TextStyle(
-                            fontFamily: 'Nunito',
-                            color: Colors.white.withOpacity(0.7),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        ShaderMask(
-                          shaderCallback: (bounds) => const LinearGradient(
-                            colors: [Color(0xFFFFFFFF), Color(0xFFFFD700)],
-                          ).createShader(bounds),
-                          child: Text(
-                            '₦$balanceStr',
-                            style: const TextStyle(
-                              fontFamily: 'Nunito',
-                              fontSize: 24,
-                              fontWeight: FontWeight.w900,
-                              color: Colors.white,
-                              letterSpacing: -0.5,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  
-                  // Status/CTA
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          user.isWalletActive ? 'Open' : 'Activate',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        const Icon(
-                          Icons.arrow_forward_ios_rounded,
+                  const SizedBox(height: 4),
+                  if (isActive)
+                    ShaderMask(
+                      shaderCallback: (bounds) => const LinearGradient(
+                        colors: [Colors.white, AppColors.walletGold],
+                      ).createShader(bounds),
+                      child: Text(
+                        '₦${nairaFormat.format(balance)}',
+                        style: const TextStyle(
+                          fontFamily: 'Nunito',
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
                           color: Colors.white,
-                          size: 10,
                         ),
-                      ],
+                      ),
+                    )
+                  else
+                    Text(
+                      isPending
+                          ? 'Waiting for parent approval'
+                          : 'Earn real cash rewards',
+                      style: AppTextStyles.caption.copyWith(
+                        color: Colors.white70,
+                      ),
                     ),
-                  ),
                 ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white.withOpacity(0.2)),
+              ),
+              child: Text(
+                isActive ? 'Open' : (isPending ? 'Status' : 'Activate'),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
               ),
             ),
           ],

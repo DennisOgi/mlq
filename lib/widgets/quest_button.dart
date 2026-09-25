@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../constants/app_constants.dart';
-import '../theme/app_theme.dart';
 
 enum QuestButtonType { primary, secondary, outline, text, success }
 
@@ -40,7 +39,7 @@ class QuestButton extends StatelessWidget {
       case QuestButtonType.primary:
         style = ElevatedButton.styleFrom(
           backgroundColor: AppColors.primary,
-          foregroundColor: Colors.black,
+          foregroundColor: AppColors.textOnPrimary,
           elevation: 0,
           shadowColor: Colors.transparent,
           padding: height <= 44
@@ -50,15 +49,15 @@ class QuestButton extends StatelessWidget {
           tapTargetSize:
               height <= 44 ? MaterialTapTargetSize.shrinkWrap : null,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(14),
           ),
         );
-        textColor = const Color.fromARGB(255, 248, 246, 246);
+        textColor = AppColors.textOnPrimary;
         break;
       case QuestButtonType.secondary:
         style = ElevatedButton.styleFrom(
           backgroundColor: AppColors.secondary,
-          foregroundColor: Colors.white,
+          foregroundColor: AppColors.textOnGold,
           elevation: 0,
           shadowColor: Colors.transparent,
           padding: height <= 44
@@ -68,26 +67,27 @@ class QuestButton extends StatelessWidget {
           tapTargetSize:
               height <= 44 ? MaterialTapTargetSize.shrinkWrap : null,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(14),
           ),
         );
-        textColor = Colors.white;
+        textColor = AppColors.textOnGold;
         break;
       case QuestButtonType.outline:
         style = OutlinedButton.styleFrom(
-          foregroundColor: AppColors.secondary,
-          side: const BorderSide(color: AppColors.secondary, width: 2),
+          foregroundColor: AppColors.primary,
+          side: const BorderSide(color: AppColors.primary, width: 1.5),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(14),
           ),
         );
-        textColor = AppColors.secondary;
+        textColor = AppColors.primary;
         break;
       case QuestButtonType.success:
         style = ElevatedButton.styleFrom(
-          backgroundColor: Colors.green,
-          foregroundColor: Colors.white,
-          elevation: 4,
+          backgroundColor: AppColors.success,
+          foregroundColor: AppColors.textOnPrimary,
+          elevation: 0,
+          shadowColor: Colors.transparent,
           padding: height <= 44
               ? const EdgeInsets.symmetric(horizontal: 16, vertical: 0)
               : null,
@@ -95,16 +95,16 @@ class QuestButton extends StatelessWidget {
           tapTargetSize:
               height <= 44 ? MaterialTapTargetSize.shrinkWrap : null,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(14),
           ),
         );
-        textColor = Colors.white;
+        textColor = AppColors.textOnPrimary;
         break;
       case QuestButtonType.text:
         style = TextButton.styleFrom(
-          foregroundColor: AppColors.secondary,
+          foregroundColor: AppColors.primary,
         );
-        textColor = AppColors.secondary;
+        textColor = AppColors.primary;
         break;
     }
 
@@ -143,12 +143,9 @@ class QuestButton extends StatelessWidget {
       case QuestButtonType.primary:
       case QuestButtonType.secondary:
       case QuestButtonType.success:
-        return Container(
+        return SizedBox(
           width: isFullWidth ? double.infinity : width,
           height: height,
-          decoration: onPressed != null && !isLoading 
-            ? AppTheme.getNeumorphicDecoration(borderRadius: 16)
-            : null,
           child: ElevatedButton(
             onPressed: isLoading ? null : onPressed,
             style: style,

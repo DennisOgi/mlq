@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'push_notification_mobile.dart';
+import 'push_notification_mobile_real.dart';
 import 'push_notification_stub.dart';
 
 /// Platform-aware push notification service
@@ -30,6 +30,10 @@ class PushNotificationPlatform {
 
   Future<String?> getToken() async {
     return await _impl.getToken();
+  }
+
+  Future<dynamic> getInitialMessage() async {
+    return await _impl.getInitialMessage();
   }
 
   Future<void> subscribeToTopic(String topic) async {

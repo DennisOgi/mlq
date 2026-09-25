@@ -109,8 +109,7 @@ class _GoalOnboardingScreenState extends State<GoalOnboardingScreen> {
       // Add the goal (now async)
       await goalProvider.addMainGoal(newGoal);
       
-      // Award coins for setting a goal
-      await userProvider.addCoins(0.5);
+      // Creation coin awards removed — economy is server-only.
       
       // Reset form for next goal
       _titleController.clear();

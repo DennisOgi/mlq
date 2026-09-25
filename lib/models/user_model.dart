@@ -14,6 +14,8 @@ class UserModel {
   final bool weeklyReportsEnabled;
   final bool isPremium;
   final bool isAdmin;
+  final int currentStreak;
+  final DateTime? lastActiveDate;
   // Parent reports scheduling preferences
   final String? timezone; // IANA timezone, e.g. "Europe/London"
   final int? preferredSendDow; // 0-6 (Sunday-Saturday)
@@ -30,6 +32,9 @@ class UserModel {
   final String walletStatus; // inactive, pending_consent, active, frozen
   final DateTime? walletActivatedAt;
   final String? subscriptionStatus; // 'free', 'trial', 'active', 'expired'
+  final bool hasSecurityQuestions;
+  /// `male`, `female`, or null when the learner has not chosen yet.
+  final String? gender;
   
   // Returns true if the user has a parent email set up
   bool get isParent => parentEmail != null && parentEmail!.isNotEmpty;
@@ -37,7 +42,8 @@ class UserModel {
   // Returns true if user should have premium checkmark (either isPremium flag OR from premium schools)
   bool get hasPremiumCheckmark => isPremium || 
     (schoolName?.toLowerCase().contains('pearls garden high') ?? false) ||
-    (schoolName?.toLowerCase().contains('wellspring college') ?? false);
+    (schoolName?.toLowerCase().contains('wellspring college') ?? false) ||
+    (schoolName?.toLowerCase().contains('rccg gov parish') ?? false);
 
   // Returns true if user is in a trial period
   bool get isTrial => subscriptionStatus == 'trial' && 
@@ -59,6 +65,8 @@ class UserModel {
     this.weeklyReportsEnabled = false,
     this.isPremium = false,
     this.isAdmin = false,
+    this.currentStreak = 0,
+    this.lastActiveDate,
     this.timezone,
     this.preferredSendDow,
     this.preferredSendHour,
@@ -71,13 +79,45 @@ class UserModel {
     this.walletBalance = 0.0,
     this.walletStatus = 'inactive',
     this.walletActivatedAt,
+    this.hasSecurityQuestions = false,
+    this.gender,
   });
 
-  /// Whether the wallet is active and ready to use
+  bool get isMale => gender == 'male';
+  bool get isFemale => gender == 'female';
+
+  /// Whether the wallet is active and ready to use.
+  ///
+  /// Source of truth is the server `wallet_status`. We intentionally do NOT
+  /// infer "active" from a positive balance — that would mask `frozen` and
+  /// `pending_consent` states (a frozen wallet can still hold a balance).
   bool get isWalletActive => walletStatus == 'active';
 
   /// Whether wallet activation is pending parent consent
   bool get isWalletPendingConsent => walletStatus == 'pending_consent';
+
+  /// Normalize wallet status from API/DB (handles casing / synonyms).
+  ///
+  /// Trusts the server status. Only when the raw status is missing/unknown do
+  /// we fall back to `activatedAt` as a hint. Balance is never used to promote
+  /// status, so frozen/pending wallets are not silently shown as active.
+  static String normalizeWalletStatus(
+    dynamic raw, {
+    DateTime? activatedAt,
+    double balance = 0,
+  }) {
+    final value = raw?.toString().trim().toLowerCase() ?? '';
+    if (value == 'active' ||
+        value == 'pending_consent' ||
+        value == 'frozen' ||
+        value == 'inactive') {
+      return value;
+    }
+    if (activatedAt != null) {
+      return 'active';
+    }
+    return 'inactive';
+  }
 
     UserModel copyWith({
     String? id,
@@ -95,6 +135,8 @@ class UserModel {
     bool? weeklyReportsEnabled,
     bool? isPremium,
     bool? isAdmin,
+    int? currentStreak,
+    DateTime? lastActiveDate,
     String? timezone,
     int? preferredSendDow,
     int? preferredSendHour,
@@ -107,6 +149,8 @@ class UserModel {
     DateTime? walletActivatedAt,
     DateTime? trialEndsAt,
     String? subscriptionStatus,
+    bool? hasSecurityQuestions,
+    String? gender,
   }) {
     return UserModel(
       id: id ?? this.id,
@@ -124,6 +168,8 @@ class UserModel {
       weeklyReportsEnabled: weeklyReportsEnabled ?? this.weeklyReportsEnabled,
       isPremium: isPremium ?? this.isPremium,
       isAdmin: isAdmin ?? this.isAdmin,
+      currentStreak: currentStreak ?? this.currentStreak,
+      lastActiveDate: lastActiveDate ?? this.lastActiveDate,
       timezone: timezone ?? this.timezone,
       preferredSendDow: preferredSendDow ?? this.preferredSendDow,
       preferredSendHour: preferredSendHour ?? this.preferredSendHour,
@@ -136,6 +182,8 @@ class UserModel {
       walletBalance: walletBalance ?? this.walletBalance,
       walletStatus: walletStatus ?? this.walletStatus,
       walletActivatedAt: walletActivatedAt ?? this.walletActivatedAt,
+      hasSecurityQuestions: hasSecurityQuestions ?? this.hasSecurityQuestions,
+      gender: gender ?? this.gender,
     );
   }
 
@@ -156,6 +204,8 @@ class UserModel {
       'weeklyReportsEnabled': weeklyReportsEnabled,
       'isPremium': isPremium,
       'isAdmin': isAdmin,
+      'currentStreak': currentStreak,
+      'lastActiveDate': lastActiveDate?.toIso8601String(),
       'timezone': timezone,
       'preferredSendDow': preferredSendDow,
       'preferredSendHour': preferredSendHour,
@@ -168,6 +218,8 @@ class UserModel {
       'walletBalance': walletBalance,
       'walletStatus': walletStatus,
       'walletActivatedAt': walletActivatedAt?.toIso8601String(),
+      'hasSecurityQuestions': hasSecurityQuestions,
+      'gender': gender,
     };
   }
 
@@ -188,6 +240,12 @@ class UserModel {
       weeklyReportsEnabled: json['weeklyReportsEnabled'] ?? false,
       isPremium: json['isPremium'] ?? false,
       isAdmin: json['isAdmin'] ?? false,
+      currentStreak: json['currentStreak'] ?? json['current_streak'] ?? 0,
+      lastActiveDate: json['lastActiveDate'] != null 
+          ? DateTime.parse(json['lastActiveDate']) 
+          : json['last_active_date'] != null 
+              ? DateTime.parse(json['last_active_date']) 
+              : null,
       timezone: json['timezone'],
       preferredSendDow: json['preferredSendDow'],
       preferredSendHour: json['preferredSendHour'],
@@ -204,6 +262,10 @@ class UserModel {
       walletActivatedAt: json['wallet_activated_at'] != null
           ? DateTime.parse(json['wallet_activated_at'])
           : null,
+      hasSecurityQuestions: json['hasSecurityQuestions'] == true ||
+          json['has_security_questions'] == true ||
+          json['security_question_1'] != null,
+      gender: json['gender'] as String?,
     );
   }
 
@@ -225,6 +287,8 @@ class UserModel {
       weeklyReportsEnabled: true,
       isPremium: true,
       isAdmin: true, // Set to true for testing admin features
+      currentStreak: 3,
+      lastActiveDate: DateTime.now(),
       timezone: 'Europe/London',
       preferredSendDow: 0,
       preferredSendHour: 9,
@@ -234,6 +298,7 @@ class UserModel {
       rank: null,
       trialEndsAt: DateTime.now().add(const Duration(days: 14)),
       subscriptionStatus: 'trial',
+      hasSecurityQuestions: true,
     );
   }
   
@@ -254,6 +319,8 @@ class UserModel {
       weeklyReportsEnabled: false,
       isPremium: false,
       isAdmin: false,
+      currentStreak: 1,
+      lastActiveDate: DateTime.now().subtract(const Duration(days: 1)),
       timezone: 'Europe/London',
       preferredSendDow: 0,
       preferredSendHour: 9,
@@ -262,6 +329,7 @@ class UserModel {
       schoolName: null,
       rank: null,
       subscriptionStatus: 'free',
+      hasSecurityQuestions: true,
     );
   }
 }

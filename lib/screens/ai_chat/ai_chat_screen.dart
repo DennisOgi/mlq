@@ -41,6 +41,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
 
   @override
   void dispose() {
+    _inputFocus.dispose();
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -152,87 +153,118 @@ class _AIChatScreenState extends State<AIChatScreen> {
     });
   }
 
+  static const _quickStarts = <({String emoji, String label, String prompt})>[
+    (emoji: '🎯', label: 'Set a Goal', prompt: 'Help me set a goal for this week.'),
+    (emoji: '🔥', label: 'Motivate Me', prompt: 'I need some motivation today.'),
+    (
+      emoji: '📘',
+      label: "Explain Today's Lesson",
+      prompt: "Explain today's mini course lesson in simple words."
+    ),
+    (
+      emoji: '🧩',
+      label: 'Solve a Problem',
+      prompt: "Can you help me solve a problem I'm facing?"
+    ),
+    (emoji: '💪', label: 'Build Confidence', prompt: 'How can I build my confidence?'),
+  ];
+
+  final FocusNode _inputFocus = FocusNode();
+
+  void _useQuickStart(String prompt) {
+    _messageController.text = prompt;
+    _messageController.selection =
+        TextSelection.collapsed(offset: prompt.length);
+    _inputFocus.requestFocus();
+  }
+
+  Future<void> _confirmNewChat(ChatProvider chatProvider) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Start New Chat'),
+        content: const Text(
+            'This will start a fresh conversation with Questor. Your current chat will be saved.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Start New'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await chatProvider.startNewConversation();
+      _scrollToBottom();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final chatProvider = Provider.of<ChatProvider>(context);
     final userProvider = Provider.of<UserProvider>(context);
     final messages = chatProvider.messages;
     final isTyping = chatProvider.isTyping;
-    
+
     return Scaffold(
+      backgroundColor: AppColors.background,
       appBar: AppBar(
+        backgroundColor: AppColors.plum,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        titleSpacing: 0,
         title: Row(
           children: [
             CircleAvatar(
-              radius: 16,
-              backgroundColor: AppColors.secondary.withOpacity(0.2),
-              child: Image.asset(
-                AppAssets.questorDefault,
-                width: 24,
-                height: 24,
-              ),
+              radius: 18,
+              backgroundColor: AppColors.secondary.withOpacity(0.25),
+              child: Image.asset(AppAssets.questorHappy, width: 28, height: 28),
             ),
-            const SizedBox(width: 8),
-            Text(
-              'Questor',
-              style: AppTextStyles.heading3.copyWith(
-                color: Colors.white,
-              ),
+            const SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Questor',
+                  style: AppTextStyles.heading3.copyWith(color: Colors.white),
+                ),
+                Text(
+                  'Your leadership buddy',
+                  style: AppTextStyles.caption
+                      .copyWith(color: Colors.white.withOpacity(0.7)),
+                ),
+              ],
             ),
           ],
         ),
-        backgroundColor: AppColors.primary,
         actions: [
-          // New chat button
           IconButton(
             icon: const Icon(Icons.add_comment_outlined),
-            onPressed: () async {
-              final confirmed = await showDialog<bool>(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('Start New Chat'),
-                  content: const Text('This will start a fresh conversation with Questor. Your current chat will be saved.'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text('Cancel'),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text('Start New'),
-                    ),
-                  ],
-                ),
-              );
-              
-              if (confirmed == true) {
-                await chatProvider.startNewConversation();
-                _scrollToBottom();
-              }
-            },
+            onPressed: () => _confirmNewChat(chatProvider),
             tooltip: 'Start New Chat',
           ),
-          // Coin balance
           Container(
-            margin: const EdgeInsets.only(right: 16),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            margin: const EdgeInsets.only(right: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.3),
-              borderRadius: BorderRadius.circular(12),
+              color: AppColors.secondary,
+              borderRadius: BorderRadius.circular(14),
             ),
             child: Row(
               children: [
-                const Icon(
-                  Icons.monetization_on,
-                  size: 16,
-                  color: Colors.black,
-                ),
+                const Icon(Icons.monetization_on_rounded,
+                    size: 16, color: AppColors.textOnGold),
                 const SizedBox(width: 4),
                 Text(
-                  '${userProvider.user?.coins.toStringAsFixed(1) ?? '0.0'}',
+                  userProvider.user?.coins.toStringAsFixed(1) ?? '0.0',
                   style: AppTextStyles.caption.copyWith(
-                    color: Colors.black,
-                    fontWeight: FontWeight.bold,
+                    color: AppColors.textOnGold,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
               ],
@@ -242,31 +274,6 @@ class _AIChatScreenState extends State<AIChatScreen> {
       ),
       body: Column(
         children: [
-          // Message explaining coin cost
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(8),
-            color: AppColors.primary.withOpacity(0.1),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(
-                  Icons.info_outline,
-                  size: 16,
-                  color: AppColors.textSecondary,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  'Each message costs 0.2 coins',
-                  style: AppTextStyles.caption.copyWith(
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          
-          // Chat messages
           Expanded(
             child: messages.isEmpty
                 ? _buildEmptyChat()
@@ -276,62 +283,71 @@ class _AIChatScreenState extends State<AIChatScreen> {
                     itemCount: messages.length + (isTyping ? 1 : 0),
                     itemBuilder: (context, index) {
                       if (index == messages.length) {
-                        // Typing indicator
                         return _buildTypingIndicator();
                       }
-                      
-                      final message = messages[index];
-                      return _buildMessageBubble(message);
+                      return _buildMessageBubble(messages[index]);
                     },
                   ),
           ),
-          
-          // Message input
+          if (messages.isNotEmpty) _buildQuickStartStrip(),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 5,
-                  spreadRadius: 1,
-                ),
-              ],
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+            decoration: const BoxDecoration(
+              color: AppColors.surface,
+              border: Border(top: BorderSide(color: AppColors.border)),
             ),
             child: SafeArea(
-              child: Row(
+              top: false,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _messageController,
-                      decoration: const InputDecoration(
-                        hintText: 'Type a message...',
-                        border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 12,
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _messageController,
+                          focusNode: _inputFocus,
+                          decoration: InputDecoration(
+                            hintText: 'Ask Questor anything…',
+                            filled: true,
+                            fillColor: AppColors.background,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(16),
+                              borderSide: BorderSide.none,
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
+                          ),
+                          minLines: 1,
+                          maxLines: 4,
+                          textCapitalization: TextCapitalization.sentences,
+                          onSubmitted: (_) {
+                            if (_canSendMessage) _sendMessage();
+                          },
                         ),
                       ),
-                      maxLines: null,
-                      textCapitalization: TextCapitalization.sentences,
-                      onSubmitted: (_) {
-                        if (_canSendMessage) {
-                          _sendMessage();
-                        }
-                      },
-                    ),
+                      const SizedBox(width: 8),
+                      Material(
+                        color: _canSendMessage
+                            ? AppColors.primary
+                            : AppColors.border,
+                        shape: const CircleBorder(),
+                        child: IconButton(
+                          icon: const Icon(Icons.send_rounded,
+                              color: Colors.white),
+                          onPressed: _canSendMessage ? _sendMessage : null,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: Icon(
-                      Icons.send,
-                      color: _canSendMessage ? AppColors.secondary : Colors.grey,
-                    ),
-                    onPressed: _canSendMessage ? () {
-                      debugPrint('Send button pressed, _canSendMessage: $_canSendMessage');
-                      _sendMessage();
-                    } : null,
+                  const SizedBox(height: 4),
+                  Text(
+                    '0.2 coins per message',
+                    style: AppTextStyles.caption
+                        .copyWith(color: AppColors.textHint, fontSize: 11),
                   ),
                 ],
               ),
@@ -342,157 +358,194 @@ class _AIChatScreenState extends State<AIChatScreen> {
     );
   }
 
-  Widget _buildEmptyChat() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 120,
-              height: 120,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.white,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 10,
-                    spreadRadius: 1,
+  Widget _quickStartTile(({String emoji, String label, String prompt}) q,
+      {double width = 128}) {
+    return SizedBox(
+      width: width,
+      child: Material(
+        color: AppColors.primarySoft,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => _useQuickStart(q.prompt),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(q.emoji, style: const TextStyle(fontSize: 24)),
+                const SizedBox(height: 8),
+                Text(
+                  q.label,
+                  maxLines: 2,
+                  style: AppTextStyles.bodySmall.copyWith(
+                    color: AppColors.primary,
+                    fontWeight: FontWeight.w800,
+                    height: 1.2,
                   ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(60),
-                child: Image.asset(
-                  AppAssets.questorDefault,
-                  fit: BoxFit.cover,
                 ),
-              ),
-            ).animate().scale(duration: 600.ms, curve: Curves.elasticOut),
-            const SizedBox(height: 24),
-            Text(
-              'Chat with Questor',
-              style: AppTextStyles.heading2,
-              textAlign: TextAlign.center,
+              ],
             ),
-            const SizedBox(height: 8),
-            Text(
-              'I can help you with your goals, give you advice, or just chat!',
-              style: AppTextStyles.body,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            QuestButton(
-              text: 'Start Chatting',
-              type: QuestButtonType.primary,
-              icon: Icons.chat,
-              onPressed: () {
-                // Focus the text field
-                FocusScope.of(context).requestFocus(FocusNode());
-                _messageController.text = 'Hi Questor!';
-              },
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildMessageBubble(ChatMessageModel message) {
-    final isFromUser = message.isFromUser;
-    
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Row(
-        mainAxisAlignment: isFromUser ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Questor avatar (only for Questor messages)
-          if (!isFromUser)
-            Container(
-              width: 36,
-              height: 36,
-              margin: const EdgeInsets.only(right: 8),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.white,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 5,
-                    spreadRadius: 1,
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(18),
-                child: Image.asset(
-                  AppAssets.questorDefault,
-                  fit: BoxFit.cover,
-                ),
+  Widget _buildQuickStartStrip() {
+    return SizedBox(
+      height: 44,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+        itemCount: _quickStarts.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (_, i) {
+          final q = _quickStarts[i];
+          return ActionChip(
+            onPressed: () => _useQuickStart(q.prompt),
+            backgroundColor: AppColors.primarySoft,
+            side: BorderSide.none,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18)),
+            label: Text(
+              '${q.emoji} ${q.label}',
+              style: AppTextStyles.caption.copyWith(
+                color: AppColors.primary,
+                fontWeight: FontWeight.w800,
               ),
             ),
-          
-          // Message content
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildEmptyChat() {
+    final name =
+        Provider.of<UserProvider>(context).user?.name.trim().split(' ').first;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
+      children: [
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [AppColors.plum, AppColors.primary],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Hi ${name == null || name.isEmpty ? 'there' : name}!',
+                      style: AppTextStyles.heading2
+                          .copyWith(color: Colors.white),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'I can help with your goals, lessons and tough days. Where shall we start?',
+                      style: AppTextStyles.body.copyWith(
+                        color: Colors.white.withOpacity(0.85),
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Image.asset(AppAssets.questorHappy, height: 96)
+                  .animate()
+                  .scale(duration: 600.ms, curve: Curves.elasticOut),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+        Text('Quick starts', style: AppTextStyles.heading3),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 104,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: _quickStarts.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 10),
+            itemBuilder: (_, i) => _quickStartTile(_quickStarts[i])
+                .animate()
+                .fadeIn(delay: (60 * i).ms, duration: 300.ms)
+                .slideX(begin: 0.1, end: 0),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMessageBubble(ChatMessageModel message) {
+    final isFromUser = message.isFromUser;
+    final name = Provider.of<UserProvider>(context).user?.name ?? '';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Row(
+        mainAxisAlignment:
+            isFromUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          if (!isFromUser)
+            Container(
+              width: 32,
+              height: 32,
+              margin: const EdgeInsets.only(right: 8),
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.primarySoft,
+              ),
+              child: ClipOval(
+                child: Image.asset(AppAssets.questorDefault, fit: BoxFit.cover),
+              ),
+            ),
           Flexible(
             child: Container(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
               decoration: BoxDecoration(
-                gradient: isFromUser
-                    ? LinearGradient(
-                        colors: [
-                          AppColors.secondary,
-                          AppColors.accent2,
-                        ],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      )
-                    : null,
-                color: isFromUser ? null : AppColors.surface,
-                borderRadius: BorderRadius.circular(18),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
-                    blurRadius: 5,
-                    spreadRadius: 1,
-                  ),
-                ],
-                border: isFromUser
-                    ? null
-                    : Border.all(
-                        color: AppColors.secondary.withOpacity(0.3),
-                        width: 1,
-                      ),
+                color: isFromUser ? AppColors.primary : AppColors.surface,
+                borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(18),
+                  topRight: const Radius.circular(18),
+                  bottomLeft: Radius.circular(isFromUser ? 18 : 4),
+                  bottomRight: Radius.circular(isFromUser ? 4 : 18),
+                ),
+                border: isFromUser ? null : Border.all(color: AppColors.border),
               ),
               child: Text(
                 message.content,
                 style: AppTextStyles.body.copyWith(
                   color: isFromUser ? Colors.white : AppColors.textPrimary,
+                  height: 1.4,
                 ),
               ),
             ),
           ),
-          
-          // User avatar (only for user messages)
           if (isFromUser)
             Container(
-              width: 36,
-              height: 36,
+              width: 32,
+              height: 32,
               margin: const EdgeInsets.only(left: 8),
-              decoration: BoxDecoration(
+              decoration: const BoxDecoration(
                 shape: BoxShape.circle,
-                color: AppColors.primary.withOpacity(0.2),
+                color: AppColors.primarySoft,
               ),
               child: Center(
                 child: Text(
-                  Provider.of<UserProvider>(context).user?.name.isNotEmpty == true
-                      ? Provider.of<UserProvider>(context).user!.name[0].toUpperCase()
-                      : 'U',
-                  style: AppTextStyles.bodyBold.copyWith(
-                    color: AppColors.primary,
-                  ),
+                  name.isNotEmpty ? name[0].toUpperCase() : 'U',
+                  style:
+                      AppTextStyles.bodyBold.copyWith(color: AppColors.primary),
                 ),
               ),
             ),

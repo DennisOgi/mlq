@@ -12,7 +12,8 @@ import 'withdrawal_bank_setup_screen.dart';
 /// Withdrawal Request Screen
 /// 
 /// Allows students to request withdrawals from their LeadWallet balance.
-/// Requires bank account setup and parent consent.
+/// Requires bank account setup. Parent consent is one-time at wallet activation;
+/// each withdrawal is reviewed by admin.
 class WithdrawalRequestScreen extends StatefulWidget {
   const WithdrawalRequestScreen({super.key});
 
@@ -30,6 +31,9 @@ class _WithdrawalRequestScreenState extends State<WithdrawalRequestScreen> {
   bool _isLoading = true;
   bool _isSubmitting = false;
   double _walletBalance = 0.0;
+  double _availableBalance = 0.0;
+  double _reservedBalance = 0.0;
+  List<Map<String, dynamic>> _activeWithdrawals = [];
   Map<String, dynamic>? _bankAccount;
 
   // Withdrawal limits
@@ -56,8 +60,20 @@ class _WithdrawalRequestScreenState extends State<WithdrawalRequestScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // Load wallet balance
       final balance = await _walletService.getWalletBalance(user.id);
+      final availableKobo = await _walletService.getAvailableBalanceKobo(user.id);
+      final walletStatus = await _walletService.getWalletStatus(user.id);
+
+      if (!mounted) return;
+      if (walletStatus['status'] != 'active') {
+        setState(() => _isLoading = false);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _showError('LeadWallet must be active before you can withdraw.');
+          Navigator.pop(context);
+        });
+        return;
+      }
 
       // Load saved bank account from database
       final profileResponse = await _flutterwaveService.client
@@ -76,8 +92,26 @@ class _WithdrawalRequestScreenState extends State<WithdrawalRequestScreen> {
         };
       }
 
+      final withdrawals = await _flutterwaveService.getWithdrawalRequests(user.id);
+      const reservingStatuses = {
+        'pending_parent_approval',
+        'pending_admin_approval',
+        'approved',
+        'processing',
+      };
+      final activeWithdrawals = withdrawals
+          .where((w) => reservingStatuses.contains(w['status']?.toString()))
+          .toList();
+      final reservedKobo = activeWithdrawals.fold<int>(
+        0,
+        (sum, w) => sum + ((w['amount_kobo'] as num?)?.toInt() ?? 0),
+      );
+
       setState(() {
         _walletBalance = balance;
+        _availableBalance = availableKobo / 100.0;
+        _reservedBalance = reservedKobo / 100.0;
+        _activeWithdrawals = activeWithdrawals;
         _bankAccount = bankAccount;
         _isLoading = false;
       });
@@ -113,8 +147,12 @@ class _WithdrawalRequestScreenState extends State<WithdrawalRequestScreen> {
       _showError('Maximum withdrawal is ₦${_flutterwaveService.koboToNaira(maxWithdrawalKobo)}');
       return;
     }
-    if (amountNaira > _walletBalance) {
-      _showError('Insufficient balance');
+    if (amountNaira > _availableBalance) {
+      _showError(
+        _availableBalance < _walletBalance
+            ? 'Insufficient available balance (₦${_nairaFormat.format(_availableBalance)} available after pending withdrawals)'
+            : 'Insufficient balance',
+      );
       return;
     }
 
@@ -188,10 +226,14 @@ class _WithdrawalRequestScreenState extends State<WithdrawalRequestScreen> {
               child: Form(
                 key: _formKey,
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     // Balance card
                     _buildBalanceCard(),
+                    if (_reservedBalance > 0) ...[
+                      const SizedBox(height: 12),
+                      _buildReservedBalanceBanner(),
+                    ],
                     const SizedBox(height: 24),
 
                     // Bank account card
@@ -220,45 +262,155 @@ class _WithdrawalRequestScreenState extends State<WithdrawalRequestScreen> {
   }
 
   Widget _buildBalanceCard() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF1A0533), Color(0xFF2D0854)],
-        ),
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF1A0533).withOpacity(0.3),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
+    return SizedBox(
+      width: double.infinity,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF1A0533), Color(0xFF2D0854)],
           ),
-        ],
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF1A0533).withOpacity(0.3),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const Text(
+              'Available Balance',
+              style: TextStyle(
+                fontFamily: 'Nunito',
+                color: Colors.white70,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '₦${_nairaFormat.format(_availableBalance)}',
+              style: const TextStyle(
+                fontFamily: 'Nunito',
+                color: Colors.white,
+                fontSize: 36,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          if (_availableBalance < _walletBalance) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Wallet ₦${_nairaFormat.format(_walletBalance)} · ₦${_nairaFormat.format(_reservedBalance)} reserved for ${_activeWithdrawals.length} active withdrawal${_activeWithdrawals.length == 1 ? '' : 's'}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontFamily: 'Nunito',
+                color: Colors.white60,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+          ],
+        ),
+      ),
+    ).animate().fadeIn(duration: 500.ms).slideY(begin: 0.2, end: 0);
+  }
+
+  String _withdrawalStatusLabel(String status) {
+    return status.replaceAll('_', ' ');
+  }
+
+  Widget _buildReservedBalanceBanner() {
+    final primary = _activeWithdrawals.first;
+    final status = primary['status']?.toString() ?? 'pending';
+    final amount = ((primary['amount_kobo'] as num?)?.toDouble() ?? 0) / 100;
+    final isApprovedAwaitingPayout = status == 'approved' || status == 'processing';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isApprovedAwaitingPayout
+            ? const Color(0xFFFFF4E5)
+            : const Color(0xFFE8F4FD),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isApprovedAwaitingPayout
+              ? const Color(0xFFFFB800)
+              : const Color(0xFF90CAF9),
+        ),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Available Balance',
-            style: TextStyle(
-              fontFamily: 'Nunito',
-              color: Colors.white70,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-            ),
+          Row(
+            children: [
+              Icon(
+                isApprovedAwaitingPayout
+                    ? Icons.hourglass_top_rounded
+                    : Icons.lock_clock_rounded,
+                color: isApprovedAwaitingPayout
+                    ? const Color(0xFFE65100)
+                    : const Color(0xFF1565C0),
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  isApprovedAwaitingPayout
+                      ? 'Payout in progress'
+                      : 'Withdrawal already pending',
+                  style: const TextStyle(
+                    fontFamily: 'Nunito',
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF1A1A2E),
+                  ),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
           Text(
-            '₦${_nairaFormat.format(_walletBalance)}',
-            style: const TextStyle(
+            '₦${_nairaFormat.format(amount)} is reserved (${_withdrawalStatusLabel(status)}). '
+            'That amount is subtracted from Available Balance until the payout completes or the request is cancelled.',
+            style: TextStyle(
               fontFamily: 'Nunito',
-              color: Colors.white,
-              fontSize: 36,
-              fontWeight: FontWeight.w900,
+              fontSize: 12,
+              color: Colors.grey.shade800,
+              height: 1.45,
             ),
           ),
+          if (isApprovedAwaitingPayout) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Your request was approved. The bank transfer is still being processed — you cannot submit another withdrawal for the same funds yet.',
+              style: TextStyle(
+                fontFamily: 'Nunito',
+                fontSize: 12,
+                color: Colors.grey.shade700,
+                height: 1.45,
+              ),
+            ),
+          ] else ...[
+            const SizedBox(height: 6),
+            Text(
+              'You can cancel this request from Withdrawal History if you no longer want to withdraw it.',
+              style: TextStyle(
+                fontFamily: 'Nunito',
+                fontSize: 12,
+                color: Colors.grey.shade700,
+                height: 1.45,
+              ),
+            ),
+          ],
         ],
       ),
-    ).animate().fadeIn(duration: 500.ms).slideY(begin: 0.2, end: 0);
+    );
   }
 
   Widget _buildBankAccountCard() {
@@ -529,7 +681,9 @@ class _WithdrawalRequestScreenState extends State<WithdrawalRequestScreen> {
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton(
-        onPressed: _isSubmitting || _bankAccount == null ? null : _submitWithdrawal,
+        onPressed: _isSubmitting || _bankAccount == null || _availableBalance <= 0
+            ? null
+            : _submitWithdrawal,
         style: ElevatedButton.styleFrom(
           backgroundColor: const Color(0xFFFFD700),
           padding: const EdgeInsets.symmetric(vertical: 16),

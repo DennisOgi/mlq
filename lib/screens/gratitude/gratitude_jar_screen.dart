@@ -7,6 +7,7 @@ import 'dart:math';
 import '../../constants/app_constants.dart';
 import '../../models/models.dart';
 import '../../providers/gratitude_provider.dart';
+import '../../providers/user_provider.dart';
 import '../../services/badge_service.dart';
 import '../../services/badge_notification_service.dart';
 
@@ -128,29 +129,6 @@ class _GratitudeJarScreenState extends State<GratitudeJarScreen> with TickerProv
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // XP reward indicator
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.star, color: AppColors.primary, size: 18),
-                    const SizedBox(width: 6),
-                    Text(
-                      '+${GratitudeProvider.gratitudeXpReward} XP',
-                      style: AppTextStyles.caption.copyWith(
-                        color: AppColors.primary,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
               Text(
                 'What are you grateful for today?',
                 style: AppTextStyles.bodyBold,
@@ -194,10 +172,20 @@ class _GratitudeJarScreenState extends State<GratitudeJarScreen> with TickerProv
                 Navigator.pop(context);
                 
                 try {
-                  final xpAwarded = await Provider.of<GratitudeProvider>(parentContext, listen: false)
+                  final isFirstEntryToday = await Provider.of<GratitudeProvider>(
+                          parentContext,
+                          listen: false)
                       .addEntry(entry);
-                  
+
+                  if (isFirstEntryToday) {
+                    await Provider.of<UserProvider>(parentContext, listen: false)
+                        .reinitializeUser();
+                  }
+
                   if (mounted) {
+                    final rewardSuffix = isFirstEntryToday
+                        ? ' (+${GratitudeProvider.gratitudeXpReward} XP)'
+                        : '';
                     WidgetsBinding.instance.addPostFrameCallback((_) {
                       if (!mounted) return;
                       ScaffoldMessenger.of(parentContext).showSnackBar(
@@ -208,9 +196,7 @@ class _GratitudeJarScreenState extends State<GratitudeJarScreen> with TickerProv
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
-                                  xpAwarded 
-                                      ? 'Added to your gratitude jar! +${GratitudeProvider.gratitudeXpReward} XP'
-                                      : 'Added to your gratitude jar!',
+                                  'Added to your gratitude jar!$rewardSuffix',
                                 ),
                               ),
                             ],
