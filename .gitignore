@@ -48,6 +48,9 @@ app.*.map.json
 .vercel
 .vercel_build_output/
 
+# Flutter SDK clone used by Vercel builds
+/flutter/
+
 # Environment variables (if you add them later)
 .env
 .env.local

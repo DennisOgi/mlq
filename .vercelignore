@@ -19,6 +19,7 @@ Thumbs.db
 # Local files
 *.log
 *.lock
+!pubspec.lock
 
 # Test files
 test/
@@ -30,6 +31,9 @@ ios/
 macos/
 linux/
 windows/
+
+# Flutter SDK cloned during Vercel install (never ship from repo)
+/flutter/
 
 # Documentation (keep only essential)
 *.md
@@ -58,3 +62,4 @@ windows/
 !vercel.json
 !pubspec.json
 !analysis_options.json
+!pubspec.lock

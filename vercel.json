@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "buildCommand": "flutter build web --release --web-renderer canvaskit",
+  "installCommand": "if [ -d flutter/bin ]; then git -C flutter fetch --depth 1 origin stable && git -C flutter checkout -f FETCH_HEAD; else git clone https://github.com/flutter/flutter.git --depth 1 -b stable flutter; fi && flutter/bin/flutter config --no-analytics && flutter/bin/flutter precache --web && flutter/bin/flutter pub get",
+  "buildCommand": "flutter/bin/flutter build web --release",
   "outputDirectory": "build/web",
-  "installCommand": "flutter pub get",
   "framework": null,
   "routes": [
     {
