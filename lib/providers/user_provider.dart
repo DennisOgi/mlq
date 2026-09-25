@@ -527,7 +527,6 @@ class UserProvider extends ChangeNotifier {
       debugPrint('Post-login hydration failed: $e');
     }
   }
-  
   // Logout method
   Future<void> logout() async {
     try {
@@ -761,6 +760,7 @@ class UserProvider extends ChangeNotifier {
         }
       }
       
+      // Check if user has completed registration before
       // A sign-in that finished while this init was in flight must not be
       // overwritten — that is what leaves users stuck on Login after success.
       if (_isAuthenticated && _supabaseService.isAuthenticated) {
@@ -797,7 +797,6 @@ class UserProvider extends ChangeNotifier {
         notifyListeners();
         return;
       }
-      // Try to load cached data as emergency fallback
       await _loadCachedData();
       if (_user == null) {
         _user = UserModel.mockUser();
