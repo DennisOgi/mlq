@@ -41,6 +41,7 @@ windows/
 
 # Scripts
 *.sh
+!vercel_flutter.sh
 *.ps1
 *.bat
 
